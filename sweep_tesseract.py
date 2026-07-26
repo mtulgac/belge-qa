@@ -8,7 +8,7 @@ import fitz
 import pytesseract
 
 from evaluate import LANG, MANUAL_GT, cer, reference_text
-from parse import page_image
+from app.ocr import page_image
 
 SAMPLES = Path("data/samples")
 OUT = Path("out/sweep")

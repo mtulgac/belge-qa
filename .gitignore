@@ -7,3 +7,4 @@ data/index/
 out/
 .cache/
 *.npz
+*.egg-info/

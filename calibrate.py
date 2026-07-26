@@ -2,7 +2,7 @@ from pathlib import Path
 
 import fitz
 
-from needs_ocr import (
+from app.needs_ocr import (
     BENIGN_INVISIBLE,
     MOJIBAKE_TR,
     MOJIBAKE_UTF8,

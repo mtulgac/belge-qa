@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "belge-qa"
+version = "0.1.0"
+description = "Document question answering (RAG) — Turkish and English"
+requires-python = ">=3.11"
+
+dependencies = [
+    "pymupdf",               # PDF text layer + page rendering
+    "pytesseract",           # OCR (system dependency: tesseract, tur+eng)
+    "opencv-python",         # preprocessing (photo class only)
+    "numpy",
+    "rapidfuzz",             # CER measurement and anchor matching
+    "pyyaml",                # golden set
+    "sentence-transformers", # multilingual embeddings
+    "ollama",                # on-prem LLM
+]
+
+# OCR engines eliminated on Day 2. Needed only to re-run the bake-off, not to
+# run the system (see DEVLOG Day 2).
+[project.optional-dependencies]
+bakeoff = ["easyocr", "rapidocr", "onnxruntime"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

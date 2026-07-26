@@ -6,7 +6,8 @@ from pathlib import Path
 import fitz
 from rapidfuzz.distance import Levenshtein
 
-from parse import (
+from app.config import DOC_LANG
+from app.ocr import (
     method_easyocr,
     method_ocr_preprocessed,
     method_ocr_raw,
@@ -34,19 +35,9 @@ REFERENCES = {
     "yonetmelik_foto": ("tobb_yonetmelik", (0, 1)),
 }
 
-# Language per doc (from samples-README). Metrics are reported TR/EN separately.
-LANG = {
-    "anadolu_yonetmelik": "TR",
-    "arxiv_2104.13437": "EN",
-    "karma": "TR",
-    "resmi_gazete_1995": "TR",
-    "tobb_taranmis": "TR",
-    "tobb_yonetmelik": "TR",
-    "tuik_cpi_en": "EN",
-    "tuik_cpi_tr": "TR",
-    "yonetmelik_foto": "TR",
-    "yonetmelik_ss": "TR",
-}
+# Language per doc. Metrics are reported TR/EN separately. The bake-off keys
+# documents by stem (out/parsed/<stem>/), config keys them by filename.
+LANG = {Path(name).stem: lang for name, lang in DOC_LANG.items()}
 
 
 def normalize(text: str) -> str:

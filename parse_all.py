@@ -6,8 +6,8 @@ from pathlib import Path
 import cv2
 import fitz
 
-from needs_ocr import needs_ocr
-from parse import (
+from app.needs_ocr import needs_ocr
+from app.ocr import (
     method_easyocr,
     method_ocr_preprocessed,
     method_ocr_raw,

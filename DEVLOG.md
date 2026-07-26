@@ -172,7 +172,183 @@ olarak seçildi.
 
 - Ön işleme fotoğraf olan belgelerde kullanılacak ama fotoğrafı ingest aşamasında
   nasıl tespit edilecek? Aday: her görüntüyü iki geçişle (ham + ön işlemeli) OCR'layıp
-  `ocr_confidence` yüksek olanı seçmek — maliyeti ölçülecek.
+  `ocr_confidence` yüksek olanı seçmek ama maliyeti ölçülecek.
 
 - Tablolar nasıl parse edilecek? Tesseract yapıyı düzleştiriyor, CER metriği bunu tam ölçmüyor. 
 Retrieval aşamasında tablo sorularıyla ayrıca test edilecek.
+
+---
+
+## Gün 3 — 25.07.2026
+
+Bugün, önceki gün netleşen parsing/OCR katmanının üstüne metin indeksleme ve basit arama
+sistemini kurdum. Bu sistemin, ve bundan sonraki adımların objektif şekilde değerlendirilebilmesi
+için 'Golden set' adını verdiğimiz test veri setini oluşturdum. Bu veri seti, örnek belgeler içerisinden
+sorulabilecek 30 farklı soruyu, bu soruların cevabının hangi belgede, hangi sayfada ve tam olarak
+nasıl geçtiğini içeriyor. Sorular zorluk kategorisine göre bölündü. Sonrasında, aşağıdaki akışı takip
+ederek sistemi test ettim:
+
+belge → sayfa bazında yönlendirme → chunking → embedding → indeks → dense retrieval -> evaluation
+
+Arama sisteminin kapsamını bugün için bilerek dar tuttum: **bugün yalnızca dense retrieval var**, 
+hibrit (BM25+RRF) ve cross-encoder rerank yok. Bunun sebebi, basit sistemde alınan performansı
+gördükten sonra, eklenecek modüllerin katkısını görerek eklemek olacak.
+
+Sistemin nihai koduna ulaşmak adına dünkü kodları da taşıdım: sistem kodu artık `src/app/` 
+altında bir paket (`ocr.py`, `needs_ocr.py`, `config.py`, `ingest.py`, `retrieval.py`)
+şeklinde geliştirilecek, ölçüm yaptığımız kodlar kökte kalmaya devam ediyor ve diğer kodları 
+`from app.x import` ile çağırıyor.
+
+### Fotoğraf Tespiti
+
+İlk olarak, Gün 2'nin açık maddesi olan fotoğraf tespitini de kapattım. OCR ile işlenecek bir 
+belgenin fotoğraf olup olmadığını, sayfadaki aydınlatma yayılımından bulmayı denedim. 
+
+Ön işleme adımında halihazırda tahmin edilen arka planda persentil farkına bakıp, seçilen eşik değerine göre
+fotoğraf tespiti yapıyorum. Fotoğraf olan belgelerde bulunan gölge sebebiyle fark yüksek çıkıyor, 
+tarama ya da ekran görüntüsünde fark sıfıra yakın. 
+
+Burada kullanılacak eşik değerini elimizdeki taranmış  belgeler ve fotoğraf üzerinde test ettim. 
+Korpusta tek gerçek fotoğraf olduğu için eşiği seçerken temiz bir taranmış sayfaya sentetik aydınlatma 
+uygulayıp aynı ölçümü tekrarladım. Seçilen eşik değeri ile yapılan test sonuçları TESTING.md'ye eklendi.
+
+### Golden set ve varyant kararı
+
+Golden set manuel şekilde hazırlandı ama `check_golden.py` kodu ile doğruladım. Alıntı gerçekten o 
+belgenin o sayfasında mı ve ingest kodunun ürettiği metinde bulunabiliyor mu kontrollerini yaptım.
+
+Asıl karar korpusla ilgili çıktı. `tobb_taranmis.pdf`, `karma.pdf` ve `tobb_yonetmelik.pdf`
+dosyaları birebir **aynı içeriğe sahip**; üçü de bu belgeler ile alakalı sorulan soruların 
+cevaplarının 6/6'sını içeriyorlar. Üçü birden indekste olursa aynı cevap üç kopya dönüyor ve 
+precision ölçülemez hale geliyor.
+
+- **Varyant grubu.** Bu üç dosya tek bir grup; indekste **aynı anda yalnız biri** bulunuyor.
+  Ana retrieval testi hep varsayılan (dijital) versiyon ile koşuyor. Taranmış ve karma sürümler
+  için ise aynı 30 soru ile ayrı bir test yaparak, OCR'ın retrieval'a herhangi bir etkisi olup
+  olmadığına baktım. 
+- **`yonetmelik_ss.png` ve `yonetmelik_foto.jpeg` korpus dışı.** İkisi de yönetmeliğin
+  yalnız 1. sayfası ve OCR testi için vardı.
+
+
+### Chunking
+
+- Chunk'ları sayfa sayfa değil belge genelinde bölüyorum, böylece sayfa sınırında başlayan
+cümle bölünmüyor (Gün 1'de not ettiğim sorun). Sayfa numarası offset'ten geri hesaplanıyor.
+Chunk metadata'sında dosya, sayfa aralığı ve hangi yöntemle çıkarıldığı var.
+
+- Burada cümle sınırı granülaritesi tek başına yetmiyor. "Tanımlar MADDE 3- (1) ... a) ... b) ..." 
+gibi maddelerde cümle sonu hiç yok ve tek bir chunk 3302 karaktere kadar çıkıyordu. O sırada
+kullandığım e5-small'ın context window değeri 512 token, fazlası vektöre hiç girmiyordu.
+
+- `CHUNK_MAX=1600` parametresi ekleyip uzun cümleleri kelime sınırında böldüm. Sonra tokenizer 
+ile doğruladım: 311 chunk'ın en uzunu 411 token, 512'yi aşan yok.
+
+- **Ama bu gerekçe, model seçimiyle birlikte düştü.** Aynı gün donan bge-m3'ün penceresi 8192
+token, yani o 3302 karakterlik chunk bu modelde hiç kırpılmazdı. Parametreyi yine de
+kaldırmadım: chunk boyutu yalnız pencereyi değil retrieval hassasiyetini de etkiliyor, 1600
+hâlâ makul bir tavan olabilir. Ancak bu haliyle ölçülmüş bir değer değil, hedef/örtüşme
+(800/150) parametreleri ile birlikte chunk taramasına giriyor.
+
+
+### Embedding modeli seçimi
+
+CPU'da hızlı çalışabilecek modelleri aynı korpus, aynı golden set ve aynı chunking ile karşılaştırdım.
+Test sonuçları TESTING.md'ye eklendi.
+
+Bulgular:
+
+- **bge-m3 seçildi.** İki dilin worst-case'inde de önde. Bedeli sorgu başına 35 ms 
+ve chunk başına ~0.46 s indeksleme.
+
+- Çapraz dil sütunu tek başına yanıltıcı (n=3). Doğru chunk'ın sırası: e5-small
+  89/172/181, e5-base 3/106/8, MiniLM 3/6/3, bge-m3 3/1/3.
+
+- İlk ölçümde q061 (çapraz dil, çapa `tuik_cpi_en.pdf`) kaçırma görünüyordu. Alınan chunk'a baktığımda
+sistem aslında **doğru cevabı veriyor**, ama cevabı Türkçe bültenden getiriyor. 2. sıradaki chunk cevabı içeriyor. 
+Burada kaçırma olarak görünmesinin sebebi, golden set üzerinde istenen kaynak belgenin İngilizce olması. 
+
+- Bu sebeple golden set'e opsiyonel `izole` alanı ekledim: soru test edilirken izole alanında adı geçen belgeler
+indeksten düşürülüyor. Şu an yalnızca q061'de kullanılıyor ve bu sadece **test için** olacak. Çalışan sistemde 
+belge gizleyen bir filtre olmayacak. 
+
+- İzole alanın etkisi dört modelde de yeniden ölçüldü: recall@k bge-m3 %85.0 → %90.0, e5-base %65.0 → %70.0;
+MiniLM ve e5-small değişmedi (biri zaten buluyordu, diğerinin doğru chunk'ı çok uzaktaydı).
+TESTING.md son sonuçları içeriyor.
+
+- **AUC** = bir `yanitla` satırının bir `reddet` satırını geçme olasılığı (ölçekten bağımsız). 
+Ham skor farkı modeller arası kıyaslanamıyor: e5 skorları dar bir banda sıkışıyor.
+
+
+
+### Dense retrieval
+
+| Dil | recall@1 | recall@3 | recall@5 | recall@10 |
+|---|---|---|---|---|
+| TR (16) | %56.2 | %78.1 | %93.8 | %93.8 |
+| EN (4) | %25.0 | %75.0 | %75.0 | %100 |
+
+- Kategori bazında (k=5): çapraz dil %100, çok belge %100, tablo %100, tek belge %88.9,
+çelişki %50. 
+
+- k=5'te kaçan sadece üç çapa var: q009 (arXiv, İngilizce) ve q041'in iki çapası birden.
+q041 çelişki sorusu, yani iki farklı belgeden iki değeri birden getirmesi gerekiyor.
+
+- **Tablo sorularının %100 çıkması dikkat çekici.** Gün 2'de "OCR tabloyu düzleştiriyor, CER
+bunu ölçmüyor, retrieval'da ayrıca test edilecek" diye not düşmüştüm. En azından doğru
+chunk'ı bulma seviyesinde tablo sorunu görünmüyor. 
+
+### Reddetme eşiği: kosinüs skoru yetmiyor
+
+Golden set içerisinde yanıtlanması ve reddedilmesi gereken sorularda çıkan kosinüs skorlarının
+dağılımını aşağıda paylaştım:
+
+| soru tipi | min skor | ortalama skor | medyan skor | max skor |
+|---|---|---|---|---|
+| yanitla (20) | 0.490 | 0.671 | 0.680 | 0.782 |
+| reddet (10) | 0.343 | 0.568 | 0.572 | 0.667 |
+
+Dağılımlar ayrışıyor ama örtüşüyor: 10 reddet satırının 8'i yanıtlanabilirlerin skor
+aralığının içinde. Gün 1'de tek örnekle "cosine eşik için zayıf" demiştim (0.84 vs 0.77); 
+şimdi 30 soruda ölçüldü ve en iyi modelde bile tek bir kosinüs eşiği yanıtlanabilir/yanıtlanamaz 
+ayrımını yapamıyor. Cross-encoder kararı gerekçelendi.
+
+### OCR'ın retrieval'a maliyeti
+
+Aynı 30 soruyu, aynı belgenin üç farklı formatıyla denedim (dijital, taranmış ve karma). Sonuçları
+TESTING.md içerisinde de paylaştım.
+
+Bulgular:
+
+- Sadece nihai recall skoru aynı değil, **soru bazında da tek bir değişiklik yok** 
+(Sonucun aynı kalıp altında bir sorunun bozulup başkasının düzelmesi ihtimalini elemek için
+soru bazında da kontrol ettim). 
+
+- Nedenini de ölçtüm: karşılık gelen chunk'lar arasında ortalama CER taranmışta %0.14, 
+karmada %0.01; vektörler 0.999+ kosinüsle örtüşüyor. Bu kadar küçük bir
+kayma 311 chunk'lık sıralamayı hiç değiştirmiyor.
+
+**Sonucun sınırı:** bu "OCR retrieval'ı etkilemiyor" demek değil, "%0.13 CER'lik temiz tarama
+etkilemiyor" demek. Varyant grubunda kötü tarama yok.
+
+### Kararlar
+
+- Golden set 30 soruda bırakıldı; dağılım korpusla uyumlu olsun diye TR ağırlıklı kaldı
+  (TR 23 / EN 7).
+- Embedding modeli **BAAI/bge-m3** olarak seçildi.
+- Ön işleme için fotoğraf tespiti eşiği: **aydınlatma yayılımı ≥ 25.0**.
+- Aynı yönetmeliğin üç formatından (varyant grubu) indekste yalnız biri olacak. O da dijital
+versiyonu olacak.
+- `CHUNK_MAX=1600` kaldı ama **gerekçesi dondurulmadı**: e5-small'ın 512 token'lık penceresi
+için konmuştu, bge-m3'ün penceresi 8192. Chunk taramasında hedef/örtüşme ile birlikte ele alınacak.
+
+
+### Açık sorular
+
+- Hibrit retrieval (BM25 + RRF) ve cross-encoder rerank ne kadar katkı verecek? Ölçüm
+  düzeneği hazır, tek yapılacak aynı testi güncellenen retrieval üzerinde koşmak.
+- Reddetme eşiği neyin üstüne kurulacak? Kosinüs yetmiyor; reranker skorunun
+  ayrımı ne kadar iyileştirdiği ölçülecek.
+- Chunk boyutu/örtüşmesi taranacak. Çapalar chunk'tan bağımsız olduğu için golden set'i
+  yeniden etiketlemeye gerek yok.
+- Retrieval hangi OCR kalitesinde kırılıyor? Temiz taramada kırılmıyor; sentetik gölgeli
+  bozuk bir varyant üretip kırılma noktası ölçülebilir.
