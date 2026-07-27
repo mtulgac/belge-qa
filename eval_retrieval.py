@@ -11,12 +11,13 @@ from app.config import (
     DEFAULT_VARIANT,
     EMBEDDING_MODEL,
     GOLDEN_SET,
+    RETRIEVER,
     ROOT,
     VARIANT_GROUP,
     model_slug,
 )
 from app.ingest import normalize
-from app.retrieval import load_index, search
+from app.retrieval import RETRIEVERS, load_index, search
 
 K_VALUES = (1, 3, 5, 10)
 RESULTS_DIR = ROOT / "out" / "retrieval"
@@ -55,10 +56,11 @@ def evaluate_row(row: dict, hits: list, variant: str, k: int) -> dict:
     }
 
 
-def anchor_rank(row: dict, variant: str, model_name: str, depth: int) -> int | None:
+def anchor_rank(row: dict, variant: str, model_name: str, depth: int,
+                retriever: str = RETRIEVER) -> int | None:
     hits = search(
         row["soru"], k=depth, variant=variant, model_name=model_name,
-        exclude=tuple(row.get("izole") or []),
+        exclude=tuple(row.get("izole") or []), retriever=retriever,
     )
     anchors = anchors_of(row, variant)
     return next(
@@ -85,8 +87,35 @@ def separability(yes: list[float], no: list[float]) -> float:
     return wins / (len(yes) * len(no))
 
 
+def _top1(hits: list) -> float:
+    """The retriever's own top-1 score. 0.0 when it returned nothing — BM25 does
+    that for a query whose terms appear in no chunk, and that is a real zero."""
+    return float(hits[0].skor) if hits else 0.0
+
+
+def _top1_dense(hits: list) -> float | None:
+    """Cosine of whatever chunk came first, or None if this retriever has none.
+
+    Needed because the hybrid's own score is an RRF value: bounded by the fusion
+    constant, nearly flat and full of ties, so an AUC over it cannot be compared
+    with the dense run's. Under pure BM25 there is no cosine at all — None rather
+    than 0.0, so the column reports "not applicable" instead of a fabricated 0.500.
+    """
+    if not hits:
+        return None
+    return None if hits[0].dense_skor is None else float(hits[0].dense_skor)
+
+
 def measure(variant: str = DEFAULT_VARIANT, model_name: str = EMBEDDING_MODEL,
-            k: int = 5) -> dict:
+            k: int = 5, retriever: str = RETRIEVER, search_fn=None) -> dict:
+    """Run the golden set through one retriever.
+
+    `search_fn` lets a sweep pass a configured variant (a partial of search_hybrid
+    with its own depth/weights/tokenizer) while `retriever` stays the label that
+    names it — the label travels with the measurement so a recorded run can never
+    be filed under settings it was not produced with.
+    """
+    search_fn = search_fn or (lambda *a, **kw: search(*a, retriever=retriever, **kw))
     rows = yaml.safe_load(GOLDEN_SET.read_text(encoding="utf-8"))
     index = load_index(variant, model_name)
     answerable = [r for r in rows if r.get("beklenen") == "yanitla"]
@@ -94,7 +123,7 @@ def measure(variant: str = DEFAULT_VARIANT, model_name: str = EMBEDDING_MODEL,
 
     max_k = max(K_VALUES + (k,))
     hits = {
-        r["id"]: search(
+        r["id"]: search_fn(
             r["soru"], k=max_k, variant=variant, model_name=model_name,
             exclude=tuple(r.get("izole") or []),
         )
@@ -102,12 +131,18 @@ def measure(variant: str = DEFAULT_VARIANT, model_name: str = EMBEDDING_MODEL,
     }
     scored = {r["id"]: evaluate_row(r, hits[r["id"]], variant, k) for r in answerable}
 
-    yes = [hits[r["id"]][0].skor for r in answerable]
-    no = [hits[r["id"]][0].skor for r in rejectable]
+    yes = [_top1(hits[r["id"]]) for r in answerable]
+    no = [_top1(hits[r["id"]]) for r in rejectable]
+    yes_dense = [_top1_dense(hits[r["id"]]) for r in answerable]
+    no_dense = [_top1_dense(hits[r["id"]]) for r in rejectable]
+    # Only meaningful when every row actually has a cosine — otherwise the column
+    # is absent, not zero.
+    has_dense = all(s is not None for s in yes_dense + no_dense)
 
     return {
         "variant": variant,
         "model": model_name,
+        "retriever": retriever,
         "k": k,
         "index": index,
         "rows": rows,
@@ -125,13 +160,18 @@ def measure(variant: str = DEFAULT_VARIANT, model_name: str = EMBEDDING_MODEL,
         "mrr": _mean(m["mrr"] for m in scored.values()),
         "yes_scores": yes,
         "no_scores": no,
+        "yes_dense": yes_dense,
+        "no_dense": no_dense,
         "overlap": sum(1 for s in no if s >= min(yes)) if yes else 0,
         "auc": separability(yes, no),
+        "auc_dense": separability(yes_dense, no_dense) if has_dense else None,
     }
 
 
-def record(m: dict, retriever: str = "dense", extra: dict | None = None) -> Path:
-    index, k = m["index"], m["k"]
+def record(m: dict, extra: dict | None = None) -> Path:
+    # The retriever label is read off the measurement rather than passed in, so a
+    # sweep cannot file a run under the wrong name.
+    index, k, retriever = m["index"], m["k"], m["retriever"]
 
     by_category = defaultdict(list)
     for row in m["answerable"]:
@@ -146,12 +186,18 @@ def record(m: dict, retriever: str = "dense", extra: dict | None = None) -> Path
             "kategori": row["kategori"],
             "beklenen": row["beklenen"],
             "top1": round(hits[0].skor, 6) if hits else None,
+            "top1_dense": round(hits[0].dense_skor, 6)
+            if hits and hits[0].dense_skor is not None else None,
             "hits": [
                 {
                     "chunk_id": h.chunk_id,
                     "dosya": h.dosya,
                     "sayfa": [h.sayfa_baslangic, h.sayfa_bitis],
                     "skor": round(h.skor, 6),
+                    "dense": [h.dense_sira, round(h.dense_skor, 6)]
+                    if h.dense_skor is not None else None,
+                    "bm25": [h.bm25_sira, round(h.bm25_skor, 6)]
+                    if h.bm25_skor is not None else None,
                 }
                 for h in hits[:k]
             ],
@@ -184,7 +230,8 @@ def record(m: dict, retriever: str = "dense", extra: dict | None = None) -> Path
             "recall_en": m["recall_en"],
             "precision": m["precision"],
             "mrr": m["mrr"],
-            "auc": m["auc"],
+            "auc": m["auc"],              # on the retriever's own top-1 score
+            "auc_dense": m["auc_dense"],  # on the top-1 hit's cosine — comparable across retrievers
             "overlap": m["overlap"],
         },
         "categories": {
@@ -199,6 +246,8 @@ def record(m: dict, retriever: str = "dense", extra: dict | None = None) -> Path
         "scores": {
             "yanitla": [round(s, 6) for s in m["yes_scores"]],
             "reddet": [round(s, 6) for s in m["no_scores"]],
+            "yanitla_dense": [None if s is None else round(s, 6) for s in m["yes_dense"]],
+            "reddet_dense": [None if s is None else round(s, 6) for s in m["no_dense"]],
         },
         "questions": questions,
     }
@@ -215,17 +264,18 @@ def record(m: dict, retriever: str = "dense", extra: dict | None = None) -> Path
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Evaluate dense retrieval.")
+    parser = argparse.ArgumentParser(description="Evaluate retrieval on the golden set.")
     parser.add_argument("--variant", default=DEFAULT_VARIANT)
     parser.add_argument("--model", default=EMBEDDING_MODEL)
     parser.add_argument("--k", type=int, default=5, help="k for the detail tables")
+    parser.add_argument("--retriever", default=RETRIEVER, choices=sorted(RETRIEVERS))
     args = parser.parse_args()
 
-    m = measure(args.variant, args.model, args.k)
+    m = measure(args.variant, args.model, args.k, args.retriever)
     index, k = m["index"], m["k"]
 
     print("=" * 78)
-    print("DENSE RETRIEVAL — golden set")
+    print(f"RETRIEVAL ({args.retriever}) — golden set")
     print("=" * 78)
     print(f"model    {args.model}")
     print(f"variant  {args.variant}  ({len(index)} chunks, dim {index.meta['dim']})")
@@ -288,9 +338,22 @@ def main() -> None:
         )
     print(
         f"\noverlap: {m['overlap']}/{len(m['no_scores'])} reddet rows score at or above the "
-        f"weakest yanitla row —\nthat overlap is what a single cosine threshold cannot separate."
+        f"weakest yanitla row —\nthat overlap is what a single threshold cannot separate."
     )
     print(f"separability (AUC): {m['auc']:.3f}   (1.0 = clean split, 0.5 = coin flip)")
+    if args.retriever != "dense":
+        cosine = (
+            f"{m['auc_dense']:.3f}; only that column is comparable with the dense run"
+            if m["auc_dense"] is not None
+            else "not available — these hits carry no cosine at all"
+        )
+        print(f"  ^ computed on the {args.retriever} score. On the top-1 hit's cosine: {cosine}.")
+    if args.retriever == "hibrit":
+        spread = max(m["yes_scores"] + m["no_scores"]) - min(m["yes_scores"] + m["no_scores"])
+        print(
+            f"    RRF scores span {spread:.4f} across all 30 questions — bounded by the fusion\n"
+            f"    constant and full of ties, so this is not a candidate abstention signal."
+        )
     print()
     print(f"recorded: {record(m).relative_to(ROOT)}")
 

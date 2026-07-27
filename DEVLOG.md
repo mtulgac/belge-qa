@@ -352,3 +352,154 @@ için konmuştu, bge-m3'ün penceresi 8192. Chunk taramasında hedef/örtüşme 
   yeniden etiketlemeye gerek yok.
 - Retrieval hangi OCR kalitesinde kırılıyor? Temiz taramada kırılmıyor; sentetik gölgeli
   bozuk bir varyant üretip kırılma noktası ölçülebilir.
+
+---
+
+## Gün 4 — 26.07.2026
+
+Dün dense retrieval kısmı bitirildikten sonra, retrieval modülünü bitirmek için hibrit 
+retrieval (BM25 + Reciprocal Rank Fusion (RRF)) ve reranking modüllerini hazırladım. Önce hibrit retrieval eklendi,
+golden set üzerinde dense model ile performansı karşılaştırıldı. Sonrasında reranker, hem
+sadece dense, hem de hibrit retrieval üzerine eklenerek retrieval aşaması için nihai karar
+alındı. Hibrit retrieval için BM25 modeli farklı parametrelerle test edildi. Reranker için ise
+2 farklı model ve farklı derinlik değerleri (top-k) için denendi.
+
+### BM25
+
+Öncelikle, sisteme BM25'in nasıl entegre edilebileceğini netleştirdim, çünkü kullanacağım tokenizer
+kararı buna bağlıydı. Şu an eklediğimiz belgeler ve golden set, belgenin dilinin bilindiğini varsayıyor.
+
+Fakat sistem gerçek senaryoda gelen belgenin dilini bilmeyeceği için, gelen her belgede Türkçe bazlı
+köke inme yapamam. Bu sebeple, BM25'i dense retrieval'ın zayıf olduğu yerde değil, yapısal olarak yapamadığı 
+yerde kullanıyorum: özel isim, madde numarası, not eşiği gibi tam eşleşme gereken şeylerde. Anlamca
+yakın olmak orada işe yaramıyor. Bunun sonucu olarak, BM25'e stemming ya da ek kesme koymadım. 
+
+
+### RRF
+
+Hibrit retrieval esnasında, iki retrieval yönteminden gelen skorları toplamak yerine 
+chunk sıralamalarını RRF ile birleştirdim. Bu kararın gerekçesi, iki yöntemin skor dağılımlarının
+çok farklı olması. `capraz_dil` sorularında (TR soru → EN belge) BM25'in terim
+örtüşmesi **tanım gereği sıfır**. Dense o üç soruda %100. Ağırlıklı skor
+toplamı o sıfırları hesaba katıp dense'in halihazırda tuttuğu satırları seyreltirdi;
+RRF'te ise bir chunk'ı sıralamayan retriever ona hiç katkı vermiyor.
+
+Varsayılan parametrelerle yapılan ilk testte hibrit retrieval dense'ten kötü performans gösterdi: 
+`depth=50`, `k=60`, eşit ağırlıkla recall@5 %82.5 (dense %90.0), TR %78.1 ve `capraz_dil` %100'den %66.7'ye düştü.
+
+Teşhis: BM25 en emin olduğu birkaç chunk sonrasında gürültü üretmeye başlıyor, ama o gürültü
+RRF'te dense'in isabetleriyle **aynı ağırlıkta oy kullanıyor**. Eşit ağırlıklı füzyon
+varsayılan değil bir varsayım, ve BM25 tek başına %62.5 iken yanlış bir varsayım.
+
+18 farklı parametre seti denedim (derinlik × RRF sabiti × ağırlık). İki eksen belirleyici çıktı:
+derinliği 20'ye indirmek ve dense'i 2:1 ağırlıklandırmak.
+
+### Hibrit retrieval
+
+Optimum parametreleri bulduktan sonra, retriever testimi gerçekleştirdim. Sonuçlar aşağıdaki 
+tabloda ve TESTING.md'de görülebilir.
+
+| retriever | recall@5 | TR | EN | MRR | çapraz dil |
+|---|---|---|---|---|---|
+| dense | %90.0 | **%93.8** | %75.0 | 0.68 | %100 |
+| bm25 tek başına | %62.5 | %59.4 | %75.0 | 0.47 | **%0** |
+| hibrit (varsayılan ayar) | %82.5 | %78.1 | %100 | 0.67 | %66.7 |
+| **hibrit d20/k10/w2:1** | **%92.5** | %90.6 | **%100** | **0.72** | %100 |
+
+Hibrit retrieval kullanmanın toplam recall'a kazandırdığı %2.5 puan. Ama soru bazında 
+baktığımda bunun tam olarak ne olduğu görünüyor: 
+
+q009 (EN, arXiv) %0 → %100 kazanıldı,  q011 (TR, çok belge) %100 → %50 kaybedildi. 
+Kazanılan soru tam da BM25'nin kullanılma sebebi, cevap "Munkres and
+Kalman filter" gibi özel isimler içeriyor. 
+
+18 parametre setini golden set için tarayıp en iyisini seçtim, yani seçim 20 örneklem üzerinde
+seçildi, overfit riski taşıyor. Bunu risk olarak yazıyorum.
+
+Rerank testi öncesinde, hibrit retrieval kullanmaya karar vermiştim. Sebepleri şu şekilde:
+
+- gecikme maliyeti sıfıra yakın, hibrit 33.9 ms, dense 34.4 ms çünkü ikinci bir embedding
+yok, aynı sorgu vektörü BM25 ile birleşiyor.
+- model seçimini "TR ve iki dilin worst-case'ine göre" yapıyorduk. 
+worst-case dense'te %75.0, hibritte %90.6. TR'ye tek başına
+bakarsan dense önde (%93.8 > %90.6), yani bu bir kazanç değil takas.
+- MRR 0.68 iken 0.72 oldu. MRR her soruda sürekli bir değer, recall gibi
+5 puanlık basamaklarla zıplamıyor, dolayısıyla tek soruya daha az duyarlı.
+
+Rerank testi sonunda bu kararım değişti, sebeplerini o kısımda anlatacağım.
+
+
+## Cross-encoder rerank
+
+Hibriti kullanmaya karar verdikten sonra aynı gün reranker'ı kurup hibrit ve sadece dense
+modele karşı test ettim. Sıra şu şekildeydi: **önce gecikme, sonra recall, sonra reddetme sinyali.**
+Cross-encoder dense'ten yapısal olarak pahalı çünkü dense sorguyu bir kez gömüyor,
+cross-encoder ise her adayı ayrı bir forward pass'ten geçiriyor ve gecikmesi kabul
+edilemezse recall katkısına bakmanın anlamı yok. Testler halihazırda uzun sürdüğü için
+iki farklı model ile ilerledim:
+
+- "BAAI/bge-reranker-v2-m3" (568M)
+- "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1" (118M) 
+
+### Gecikme
+
+Gecikme değerleri golden set'i dense retrieval'dan gelen adaylarla uçtan uca ölçünce:
+20 chunk derinliğinde mmarco 6.4 s/soru ve bge 6.9 s/soru ortalama gecikmeye sahip, 
+çünkü gerçek chunk'lar ~512 token ve reranker maliyeti bu boyda çok artıyor. 
+mmarco'nun avantajı ancak **kısa chunk'ta** açılıyor (maliyeti dizi uzunluğuyla büyüyor, 
+bge tavanda sabit). Derinlik 10 olduğunda da iki model de soru başına süre ~3 saniye gecikmeye
+sahip. Yani **gecikme, modeli seçmiyor.**
+
+ 
+### Recall
+
+Reranker recall@5 değerini %92.5'ten %97.5'e çıkardı (TR 96.9, EN 100, MRR 0.85). 
+Soru bazında da hibritin kaybettiği q011 geri geldi, dense-base'de q041 (çelişki) de
+düzeldi ve **kayıp yok.** Hibritin "bir soru kazanç / bir soru kayıp" takası kapandı.
+
+Asıl sürpriz: reranker'a hibrit yerine **dense** adayları vermek daha iyi (97.5 vs 95.0).
+Reranker dense retrieval ve 20 derinlik üzerinde, hibriti eklerken gerekçe gösterdiğim q009'u 
+(özel isimler, BM25'in işi) BM25 olmadan topluyor, çünkü q009'un cevabı dense'in top-20'sinde mevcut, 
+sadece top-5'te değildi; reranker onu yukarı çekiyor. 
+
+Gecikme değeri derinlik 20 olduğunda yüksek olduğu için (yaklaşık 6.5 saniye), 
+derinlik 10 olduğunda recall tekrar test edildi. Dense + reranker için recall@5 değeri 
+%95 çıktı (derinlik 20 iken 97.5). Bu düşüş, gecikmede sağladığı faydaya göre tolere edilebilir bir düşüş.
+
+
+### Reddetme sinyali
+
+- Reranker skorunun asıl merak edilen tarafı reddetme eşiğiydi çünkü kosinüs yetmiyordu
+(AUC 0.790). Reranker'ın skor dağılımı görsel olarak çok daha ayrık (bge yanitla medyan 0.99 vs
+reddet 0.19). Ama **AUC değerine** baktığımızda reranker'ın kosinüsü kesin yendiği söylenemez. (0.84)
+
+- Neden bu kadar ayrık dağılım tek eşikle çözülmüyor sorusu soru bazlı bakıldığında ortaya çıkıyor
+Bir 'reddet' sorusu 0.95+ skorluyor (bge 0.952, mmarco 0.999), bir yanitla sorusu ~0 skor alıyor. 
+Eşik 0.5'te olursa 3 uydurma + 3 gereksiz reddetme anlamına geliyor.
+
+- Uydurmayı sıfırlamak (çalışma amacı) eşiği o aykırının üstüne çekmeyi, 
+o da yanıtlanabilirlerin 7/20'sini (bge) ya da 14/20'sini (mmarco) feda etmeyi
+gerektiriyor. Tek skaler eşik bu bedeli ödemeden çalışmıyor, önemli nokta bge burada mmarco'dan
+çok daha iyi.
+
+### Kararlar
+
+- Retrieval mimarisi: **dense → reranker, hibrit/BM25 yok.** Hibrit bir ara basamak testi olarak kaldı, 
+nihai sisteme dahil değil.
+
+- Rerank modeli: **bge.** Kritik nokta: golden set 30 soruda iki model de recall için %97.5 tavanına vuruyor,
+yani test seti bu iki modeli **ayırt edemiyor** Görülmemiş belgelerde (asıl kullanım) bge daha güvenilir.
+Üstelik reddetme değerleri de ölçülü olarak bge lehine çıktı (AUC 0.840 vs 0.800).
+
+- **Derinlik 10 seçildi** (%95.0, ~3 s/soru): Derinlik 20'nin %97.5'i +2.5 puan ama tek yanlış cevap
+  (q041 çelişki), 2× gecikmeye değmiyor. Derinlik 10'da recall, dense ve hibrit için eşit, "BM25 gereksiz"
+  kararı korunuyor. Reddetme eşiği derinlikten bağımsız.
+
+### Açık sorular
+
+
+- **Reddetme hâlâ çözülmedi.** Tek eşik yetmiyor. Aday yönler: (1) asimetrik eşik +
+  ikinci sinyal (top1−top2 marjı, ya da kosinüsle 2-özellikli kapı); (2) asıl backstop
+  **generation'da LLM'in grounding/citation kontrolü** (Gün 5). O reddet aykırısını da
+  incelemek gerek (konu korpusta var ama cevap yok mu?).
+- Model freeze mmarco'da mı: golden_total sonrası.

@@ -1,7 +1,8 @@
 import argparse
 
-from app.config import DEFAULT_VARIANT, EMBEDDING_MODEL, VARIANT_GROUP
+from app.config import DEFAULT_VARIANT, EMBEDDING_MODEL, RETRIEVER, VARIANT_GROUP
 from app.ingest import index_dir, ingest
+from app.retrieval import RETRIEVERS
 from eval_retrieval import measure, record
 
 
@@ -9,6 +10,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Compare format variants.")
     parser.add_argument("--model", default=EMBEDDING_MODEL)
     parser.add_argument("--k", type=int, default=5)
+    # BM25 should be the more brittle half here: a single OCR character error
+    # loses the token outright, where the embedding degrades gradually.
+    parser.add_argument("--retriever", default=RETRIEVER, choices=sorted(RETRIEVERS))
     args = parser.parse_args()
 
     runs = {}
@@ -16,13 +20,13 @@ def main() -> None:
         if not (index_dir(variant, args.model) / "vectors.npy").exists():
             print(f"\n### indexing {variant} with {args.model}")
             ingest(variant, args.model)
-        runs[variant] = measure(variant, args.model, args.k)
+        runs[variant] = measure(variant, args.model, args.k, args.retriever)
         record(runs[variant])
 
     k = args.k
     print()
     print("=" * 88)
-    print(f"FORMAT VARIANTS — model {args.model}, k={k}")
+    print(f"FORMAT VARIANTS — model {args.model}, retriever {args.retriever}, k={k}")
     print("=" * 88)
     print(
         f"{'variant':22} {'ocr chunks':>11} {f'r@{k}':>7} {'TR':>7} {'EN':>7} "

@@ -17,7 +17,6 @@ from app.config import (
     CHUNK_OVERLAP,
     CHUNK_TARGET,
     DEFAULT_VARIANT,
-    DOC_LANG,
     EMBEDDING_MODEL,
     INDEX_DIR,
     SAMPLES,
@@ -42,7 +41,6 @@ class Chunk:
     sayfa_baslangic: int      # 1-indexed, like the golden set's anchors
     sayfa_bitis: int
     yontem: str               # text_layer | ocr_raw | ocr_preprocessed | mixed
-    dil: str
     metin: str
 
 
@@ -166,7 +164,6 @@ def chunk_document(name: str, pages: list[tuple[str, str]]) -> list[Chunk]:
             sayfa_baslangic=p_start + 1,
             sayfa_bitis=p_end + 1,
             yontem=used[0] if len(used) == 1 else "mixed",
-            dil=DOC_LANG.get(name, "??"),
             metin=body,
         ))
         # Overlap: hand the tail sentences of this chunk to the next one, so a

@@ -23,6 +23,8 @@ dependencies = [
 # run the system (see DEVLOG Day 2).
 [project.optional-dependencies]
 bakeoff = ["easyocr", "rapidocr", "onnxruntime"]
+# Cross-encoder reranker (Day 4). CrossEncoder ships with sentence-transformers;
+dev = ["pytest"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
