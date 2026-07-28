@@ -503,3 +503,215 @@ yani test seti bu iki modeli **ayırt edemiyor** Görülmemiş belgelerde (asıl
   **generation'da LLM'in grounding/citation kontrolü** (Gün 5). O reddet aykırısını da
   incelemek gerek (konu korpusta var ama cevap yok mu?).
 - Model freeze mmarco'da mı: golden_total sonrası.
+
+---
+
+## Gün 5 — 27.07.2026
+
+Retrieval katmanı son haliyle netleştikten sonra, bugün sistemi uçtan uca tamamladım.
+Son kalan kısımlar LLM kullanarak cevap üretimi ve soru reddetme kısmıydı. Case çalışmasının
+amacı, sorulan soruya kaynak göstererek sorunun dilinde ve **belgeye dayalı** (uydurmayan) 
+bir cevap üreten, sorunun cevabı belgede yoksa da soruyu reddeden bir sistem yapmaktı.
+Cevap üretme kısmı için Ollama destekli 4 farklı model denendi, 2 model üzerinde karar kılındı.
+Kullanıcı hızlı ya da daha güvenilir model arasında seçim yapabilecek. Buna ek olarak, seçilen
+modellerin reasoning kapabilitesi olduğu için, 'think' parametresinin sonuca etkisi izlendi.
+Modellerin performansının ölçümü için `eval_generation.py` ve (opsiyonel) `judge_generation.py` eklendi.
+Bugünün kararları öncekiler gibi ölçümle alındı. Cevap üretimi sonrasında sistem Docker'a taşındı.
+
+### Cevap üretme kurulumu
+
+Cevap üretme kodu arayüzden bağımsız şekilde `pipeline.answer(...)` fonksiyonuna bağlı.
+CLI, arayüz ve evaluation kodlarının hepsi bu fonksiyonu çağıracak, böylece retrieval 
+,reddetme, cevap üretim yolu tek yerde tanımlı. LLM'e verdiğim prompt kuralları: 
+- (1) yalnız verilen pasajlardan cevapla, 
+- (2) her iddiayı **pasaj numarasıyla** kaynak göster, 
+- (3) cevap pasajlarda yoksa `[YANITLANAMADI]` dön, 
+- (4) kaynaklar çelişiyorsa ikisini de kaynağıyla sun, 
+- (5) soruyu sorunun dilinde cevapla.
+
+Belge kaynak gösterme kısmını pasaj numarasına (`[1]`, `[3]`) çevirdim; gerçek dosya ve sayfayı ben hit
+listesinden eşliyorum. Modelin gösterdiği numara yalnız ona verilen bir pasajı işaret edebilir.
+
+Çoklu-tur konuşmayı bu çalışmada yapmadım çünkü hazırladığım golden set tek soru-cevap destekliyor. 
+
+### LLM seçimi
+
+Model seçimimi ilk günden aldığım On-prem/Ollama kararına göre yaptım. Seçilecek modelin 
+CPU'da çalışması lazım, model boyutu pratikte ~12B ile sınırlı. Türkçe cevap üretimi çok kritik. 
+Bu sebeplerle model adayları olarak qwen3.5:4b/9b ve  gemma4:e4b/12b modellerini seçtim.
+
+Kullanacağım modelleri embedding/reranker aşamalarındaki gibi **ölçerek** seçtim; 
+`eval_generation.py` golden set üzerinde reddetme matrisini ve cevap doğruluğunu TR/EN ayrı ölçüyor. 
+ Sonuçları TESTING.md içerisinde paylaştım.
+
+Bulgular:
+
+- **gemma4:12b elendi:** CPU'da soru başına 50-160 s (medyan ~65 s), interaktif kullanım
+  imkânsız. Ama offline yargıç olarak geri döndü (aşağıda).
+- **qwen3.5:9b elendi:** cevap doğruluğunda tepedekilerle eşit (15/20) ama **uydurma 3/10**
+  (q022, q033, q034). Projenin ilk önceliği sıfıra yakın uydurma; aynı boyuttaki gemma4:e4b
+  1/10 yapıyor.
+- **Kalan iki model (qwen3.5:4b - gemma4:e4b) neredeyse eşit** (judge ile ikisi de 16/20). 
+Bu yüzden birini seçmek yerine ikisini de tutuyorum: iki mod, kullanıcı seçsin. 
+
+- `turbo` = qwen3.5:4b (medyan 14 s), `large` = gemma4:e4b (medyan 37 s). 
+Varsayılan `large`, çünkü faithfulness öncelik; UI'da hız için `turbo`'ya geçilebilir.
+
+### Reddetme kapısı: neden iki aşamalı
+
+3. ve 4. günde tek skaler eşiğin (önce kosinüs, sonra reranker skoru) yetmediğini ölçmüştüm.
+Bugün reranker top-1 skorlarını soru soru çıkarınca neden yetmediği somutlaştı: reranker `capraz_dil`
+kategorisinde yanıtlanması gereken soruları 0.003-0.012 aralığında skorluyor 
+(reranker onları **sıralıyor** ama mutlak skor neredeyse sıfır), 
+buna karşılık `yanlis_oncul` kategorisinde reddedilmesi gereken bir soru (q033) **0.9519** skoru aldı.
+Tek bir eşik kullanımı ya uydurmaya izin verir ya 7/20 yanıtlanabilir soruyu feda ederdi.
+
+Buna ek olarak top-5 chunk'ın ortalama skorunu denedim (top-1 gürültülüyse ortalama daha kararlı olur mu diye).
+Tersine çıktı, ortalama **iki sinyali de** bozdu (tablo TESTING'de). Bunun sebebi, cevabı sadece tek bir chunk'ta
+olan ve yanıtlanması gereken sorular, ortalamada reddet bandına düşüyor, sorularının konusu belgede geçen ama 
+reddedilmesi gereken sorular yüksek kalıyor. reranker top-1 en iyi sinyal, ama tek başına yetmiyor.
+
+Kararım iki aşamalı kapı, uydurma-öncelikli:
+
+- **Aşama 1:** reranker top-1 skoru < `0.003` ise, LLM'i çağırmadan reddet. Eşiği
+  **sıfır-yanlış-red** noktasına koydum (en zayıf yanıtlanabilir soru 0.0032). Bu şekilde hiçbir
+  yanıtlanabilir soru düşürmez ve yalnız bariz alan-dışı sorular (q071/q072) elenir.
+  
+- **Aşama 2:** LLM grounding, pasajlarda cevap yoksa `[YANITLANAMADI]`.
+  Skor bandının içinde kalan 8 reddet sorusunu (q033 aykırısı dahil) bu yakalıyor.
+
+Sonuç: seçilen iki modelinde de **uydurma 1/10**. Tek kaçan **q022** (arXiv makalesi, "video stream
+accuracy", reddedilmesi gereken soru), üç modelde de uyduruldu. Bu soru LLM grounding'in de sınırı oldu,
+yalnız eşiğin değil; düzeltilebilir hata olarak not ettim.
+
+### Doğruluk ölçümü ve LLM-as-judge
+
+Yanıtlanabilir soruların cevaplarının doğruluğunu golden set içinde bulunan referans alıntılarla 
+karşılaştırıp başarıyı otomatik ölçmek istedim. İlk yapılan testlerde YANLIS_CEVAP etiketli
+bazı cevapların aslında doğru olduğunu görünce üç ayrı kırılma çıktı:
+
+- **çapraz dil:** referans İngilizce ("increased by 45.14% for housing"), cevap Türkçe olduğunda eşleşme
+  tanım gereği sıfır.
+- **paraphrasing:** modelin cevabı "dokuz dönemdir" ama referans "en çok dokuz dönemde" olursa yanlış olarak
+işaretleniyor.
+- **sayı formatı:** `45,14` vs `45.14` yine yanlış olarak işaretlendi.
+
+Metrik **her modeli** düşük gösteriyordu. Normalizasyon (NFKC) ve birkaç metin düzeltmesi ile bariz hataları
+düzelttim. gemma4:e4b modelinin doğru cevap sayısı 12'den → 15'e, qwen3.5:4b ise 5'ten → 14'e sıçradı.
+
+Deterministik eşleştiricinin bariz hataları düzelse bile bir **alt sınır mevcut**: paraphrasing
+ölçülemiyor. Bu sebebple opsiyonel bir LLM yargıç ekledim (`judge_generation.py`). Tasarım ilkeleri:
+
+- **Offline**, LLM yargıcı kaydedilmiş cevaplar üzerinde çalışır, bu sayede model yeniden çalışmaz.
+- **Sonuç JSON'ı ASLA değiştirmez**, düzeltmeyi kodda/bellekte yapar, yargıyı ayrı dosya olan
+ `<model>.judge.json`'a yazar.
+- Yargıç, değerlendirilen modelden **farklı ve güçlü** olmalı (bir model kendini yargılarsa
+  kayırır). Cevap üretimi testinde gecikmeden elenen **gemma4:12b**, offline olduğu için burada ideal
+  yargıç, çünkü gecikme önemli değil.
+- **İstenen bilgi cevapta varsa, fazladan bilgi cevabı yanlış yapmaz**, uydurma ya da
+  çelişki olmadıkça.
+
+Yargıç yanlış olarak işaretlenen doğru cevapları çevirdiği gibi, birkaç vakada da doğru işaretlenen
+cevabı yanlış olarak çevirdi. Bu vakaları da inceledim:
+
+- **Deterministik false-positive'i doğru yakalama** (yargıç haklı): q051 (1,37 sayısı var ama
+  yanlış tarihe bağlanmış). Deterministik eşleştiricinin zayıflığı: sayı doğru, bağlam yanlış.
+- **Fazla katılık** Cevapta aranan bilgi vardı, fakat fazladan **doğru** bilgi cezalandırılıyordu.
+  Bu kısmı yukarıdaki kurala gevşetince düzeldi.
+
+- Buna ek olarak bir soruda (q052) qwen3.5:4b modeli 22 bin karakterlik bir **tekrar döngüsüne** girmiş;
+yargıç bunu "aynı paragrafın çok sayıda tekrarı" diye yorumlamış ve sonuç vermemiş.  Parser'ı, yargıçtan
+sonuç yoksa sessizce YANLIS saymak yerine **"parse edilemedi"** olarak işaretleyecek
+şekilde düzelttim.
+
+Bu son bulgu üzerine üretim modellerine de bir çıktı sınırı (`num_predict = 512`) koydum:
+grounded bir cevap birkaç yüz token, 512 meşru cevabı kesmiyor ama degenerasyon döngüsünü ve
+worst-case gecikmeyi (q052'de 266 s) engelliyor.
+
+### Depth=20 denemesi
+
+4.Gün'de reddettiğim chunk depth=20'yi cevap üretme seviyesinde tekrar denedim (q041 sorusunu
+kurtarır mı diye). Kurtarmadı: q041 iki modelde de hâlâ yanlış, çünkü aday havuzu 20 olsa da,
+doğru cevabı içeren chunk top-5'e girmiyor. Toplam skor da artmadı (gemma4:e4b 15 → 14'e düştü bile). 
+Depth 10 kararı cevap üretiminde de doğrulandı.
+
+## Docker ve thinking politikası
+
+Cevap üretme kısmını bitirince sistemi kolay ayağa kaldırma ve sonuçların tekrarlanabilirliği adına
+sistemi Docker'a taşıdım. Docker imaj hazırlanıp, sistem çtan uca denenirken large modelde
+beklemediğim bir bug çıktı ve bu blok ikiye ayrıldı: Docker imajı doğrulamak, ve doğrularken
+bulduğum gizli bir **thinking** sorununu çözmek. İkincisi generation'ın 5. gün kararlarından
+birini (`num_predict=512`) revize ettirdi, o yüzden buraya yazıyorum.
+
+### Docker imajı
+
+- **turbo (qwen3.5:4b) uçtan uca çalışıyor**. Retrieval + reranker + HF cache + ollama +
+  doğru citation eşleme.
+- **large (gemma4:e4b) modeli ~8 GB Docker VM'inde OOM hatası aldı.** ollama yüklerken tensörler ~8.5 GB
+  (`load_tensors` 5903 + 2827 MiB), 7.75 GB'lik VM'e sığmıyor. Docker Desktop belleğini 12 GB'a 
+  çıkarınca çalıştı. **Dağıtım notu:** large modeli VM ≥~12 GB RAM ister, turbo 8 GB'ta çalışır.
+
+### Gemma modelinden boş cevap: gizli thinking × çıktı sınırı
+
+Docker'da gemma modeli ile "Haziran 2026 için enflasyon oranı nedir?" sorusunun cevabı boş döndü. Fakat bu
+bir hata değil, sadece boş satır. Sebebi ham yanıtın metadata'sından çıkardım: 
+gemma4:e4b bir **thinking modeli**; ürettiği token'lar `message.thinking`'e gidiyor, 
+`content` boş, `done=length`. Yani `num_predict=512` tavanı sadece reasoning'e
+gidiyor ve **cevap başlamadan** kesiliyor.
+
+En kritik soru: bu problemi **golden set neden yakalamadı?** 30 sorunun hiçbirinde boş cevap yok.
+Fark sorunun kesinliğinde: golden sorular çok belirli sorular soruyor ("bir önceki aya göre yüzde kaç")
+,gemma az düşünüyor, bu sebeple thinking+cevap 512'ye sığıyor. Benim test için yazdığım soru hem 
+**belirsiz** (hangi oran: aylık/yıllık/12-ay/özel-kapsam?) hem de **belgede olmayan bir terim** 
+("enflasyon"; belgeler "TÜFE" diyor) içeriyor. gemma uzun uzun düşünüyor, tavanı aşıyor. 
+
+Çıkarılan ders: golden set gerçek kullanıcının belirsiz sorularını yeterince temsil etmiyormuş, 
+bug'ı maskeleyen buydu. 
+
+Gemma thinking açık şekildeyken worst case ~1106 token kullandı (açık uçlu İngilizce soru). Marjin
+olarak yüzde 40'lık bir pay bırakarak max token limitini (num_predict) 1536 token seçtim.
+Qwen ise thinking kapalı olduğu için 512 sadece cevap için yeterli. Ayrıca artık boş cevap geldiğinde
+`grounded=False` (gerekçeli red) oluyor.
+
+### Thinking on/off: Model bazında, ölçümle
+
+'think' parametresinin seçilen modellere etkisini golden set'te ölçtüm (tablolar TESTING'de).
+
+- **gemma think=False:** cevaplanabilir sorularda **eşit performans** (15/20) ve **2.7× daha hızlı** 
+(medyan 13.6 vs 36.6 s) — ama **uydurma 1/10 → 4/10.** Cevap öncesi düşünme kapanınca 
+yanlış-öncül/cevaplanamaz sorular (q024/q033/q034) cevaplanmaya başlıyor. Uydurma olmaması birinci
+öncelik → **gemma'da think açık kalıyor** (çıktı sınırı 1536 ile).
+- **qwen think=True:** qwen zaten `think=False` idi. Açınca reasoning'i **felaket uzun**,
+  tek bir soru için 4600-6000+ token; 6000 tavanı bile tek başına thinking'e yetmiyor.
+  Gecikme tek başına diskalifiye sebebi, bu sebeple **qwen think=False kalıyor.** 
+  Tek bir soru bile çok uzun sürdüğü için tüm seti test etmedim.
+
+Sonuç simetrik ve savunulabilir: **her modelin düşünme ayarı rolüyle gerekçeli**, large model kalite
+(think on, ~36 s, uydurma 1/10), turbo model hızlı (think off, ~14 s).
+
+### Kararlar
+
+- **Cevap üretme: iki mod.** `turbo` = qwen3.5:4b, `large` = gemma4:e4b, varsayılan `large`.
+  Elenenler: qwen3.5:9b (uydurma 3/10), gemma4:12b (CPU gecikmesi → offline yargıç).
+- **Reddetme: iki aşamalı.** Stage-1 reranker top-1 eşiği `0.003` (sıfır-yanlış-red), stage-2
+  LLM grounding. Uydurma 1/10 (residual q022).
+- **Doğruluk ölçümü:** Deterministik anahtar-eşleşme (savunulabilir alt sınır) + opsiyonel
+  gemma4:12b yargıç.
+- **Depth 10 korundu**; RERANK_DEPTH=20 kazanç getirmedi.
+- **Docker:** iki servis, model'ler named volume, ilk çalışmada provizyon. large modeli için 
+  Docker VM ≥~12 GB RAM (ölçüldü), turbo 8 GB.
+- **Model bazlı token limiti `num_predict`:** gemma 1536 (thinking bütçesi + cevap), qwen 512 (cevap +
+  degenerasyon sınırı). Boş `content` artık `grounded=False`.
+- **Thinking model bazında:** large açık, turbo kapalı.
+
+### Açık sorular
+
+- **q022 residual:** Soru belge ile ilgili fakat yanıtlanamaz, üç modelde de uyduruldu. 
+  Prompt'ta daha katı grounding mi, yoksa retrieval'dan "cevap yok" sinyali mi gerek? Zaman kalırsa ölçülecek.
+- **q041 çelişki:** retrieval (3,00 chunk'ı top-5 dışında) + generation birlikte. Çelişki
+  kategorisi için GEN_K/depth artırılmalı mı? Runtime dil/kategori-kör olduğu için global olur.
+- **q051/q052:** tablo hücresi (yanlış hücre seçimi) ve turbo degenerasyonu. İkisi de
+  generation tarafında.
+- Docker'da large modelin **gerçek CPU inference gecikmesi** ölçülmedi — local ~36 s MPS/GPU'lu;
+  Docker CPU daha yavaş olacak, arayüzde bu daha da önemli.
+- Chunk boyutu/örtüşmesi hâlâ taranmadı.

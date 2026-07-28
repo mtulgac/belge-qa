@@ -103,14 +103,15 @@ def model_slug(model_name: str) -> str:
 # wording and across languages, BM25 matches the literal string. The second is
 # what a document corpus needs for article numbers, grade thresholds and proper
 # nouns, where being close in meaning is worthless.
-# Frozen by sweep_retrievers.py (18 fusion settings, k=5). Chosen on the worst-case
-# language, the rule the project already uses: hybrid 90.6% against dense's 75.0%.
-# On Turkish alone dense is still ahead (93.8% vs 90.6%), so this is a trade, not a
-# clean win — and the trade is literally two questions, q009 (EN) gained against
-# q011 (TR) lost, which at n=20 is inside the noise. The sturdier signals are that
-# English recall goes 75.0% -> 100% and MRR 0.68 -> 0.72; MRR moves continuously per
-# question rather than in 5-point steps. Table in TESTING.md.
-RETRIEVER = "hibrit"     # dense | bm25 | hibrit
+# Frozen to "rerank" (dense -> cross-encoder) as the runtime path. The base
+# ablation showed reranking dense's top-`depth` matches or beats reranking the
+# hybrid's (97.5% vs 95.0% at depth 20), because the reranker recovers q009 — the
+# proper-noun question BM25 was added for — from the dense pool. Fusion is therefore
+# redundant in front of the reranker; "hibrit" and "bm25" stay selectable as the
+# measured evidence that led here, not as the path. See the Reranking block below and
+# TESTING.md. (Flipped from "hibrit" on Day 5 when pipeline.py landed — until then the
+# default was left on hibrit so eval did not silently require the reranker model.)
+RETRIEVER = "rerank"     # dense | bm25 | hibrit | rerank
 
 # Reciprocal Rank Fusion. Rank-based rather than a weighted sum of scores, and
 # the reason is structural rather than measured: on the capraz_dil questions
@@ -197,3 +198,98 @@ RERANK_BASE = "dense"    # hibrit | dense
 # target and keeps recall reproducible across machines. Measured per-pair cost is
 # model- and chunk-length-dependent (bench_rerank.py).
 RERANK_DEVICE = "cpu"
+
+# --- Generation (LLM) --------------------------------------------------------
+# On-prem via Ollama: the system is assumed to run on company documents, so the LLM
+# stays local (the same reasoning that put VLM-OCR out of scope). Deploy target has
+# no GPU, so candidates are capped at ~7-12B — larger is unusable on CPU.
+#
+# Two production tiers, user-selectable (the web UI exposes turbo/large). Both frozen
+# by eval_generation.py on the golden set, chosen on the project's priority — zero
+# hallucination — which the abstention matrix measures directly (unaffected by the
+# content matcher). Measured, TR 16 / EN 4:
+#   large  gemma4:e4b   — uydurma 1/10, gereksiz-red 0/20, doğru cevap 15/20. Best on
+#                         the priority AND tied-best on answers. Cost: ~36 s/query CPU.
+#   turbo  qwen3.5:4b   — uydurma 1/10, gereksiz-red 1/20, doğru cevap 14/20. Near-equal
+#                         quality at ~11 s/query (3x faster) — the interactive default.
+# Dropped: qwen3.5:9b (uydurma 3/10 — fails the priority despite tying on answers) and
+# gemma4:12b (50-160 s/query, unusable on the on-prem CPU target). Reasoning models were
+# excluded up front: their <think> traces inflate CPU latency and complicate the
+# deterministic sentinel/citation parse (generation.py still strips <think> defensively).
+# NOTE (2026-07): qwen3.5 / gemma4 tags are newer than this code — verify the exact size
+# labels at `ollama pull` time.
+LLM_TIERS = {
+    "turbo": "qwen3.5:4b",   # fast, interactive
+    "large": "gemma4:e4b",   # best faithfulness / lowest hallucination
+}
+# large is the default: faithfulness is the graded priority, and the UI lets a user
+# trade it for turbo's speed. Resolved to a concrete model for pipeline/cli/eval.
+LLM_DEFAULT_TIER = "large"
+LLM_MODEL = LLM_TIERS[LLM_DEFAULT_TIER]
+# The eval set going forward is the two production models; the wider sweep that picked
+# them is recorded in DEVLOG/TESTING, not re-run by default.
+LLM_CANDIDATES = list(LLM_TIERS.values())
+
+
+def resolve_model(tier_or_name: str) -> str:
+    """A tier alias (turbo/large) -> its model; any other string is taken as a model
+    name as-is, so callers can pass either."""
+    return LLM_TIERS.get(tier_or_name, tier_or_name)
+
+
+# The LLM-as-judge model for judge_generation.py (optional offline correctness layer).
+# Two rules, both because a judge that grades its own output is biased lenient:
+#   - independent of the evaluated models (outside the turbo/large set), and
+#   - as strong as possible — judging runs OFFLINE over saved answers, so the latency
+#     that ruled gemma4:12b out of production is irrelevant here, which makes it a good
+#     judge. A larger model pulled just for judging is even better.
+JUDGE_MODEL = "gemma4:12b"
+
+# Grounded extraction, not open generation: temperature 0 so the answer is
+# reproducible and stays on the passages.
+LLM_TEMPERATURE = 0.0
+# Ollama context window. bge-m3 chunks cap ~512 tokens; GEN_K of them plus the
+# prompt fits comfortably, and Ollama truncates silently past num_ctx otherwise.
+LLM_NUM_CTX = 8192
+# Output cap (num_predict), per-model — the two production models spend the budget
+# differently:
+#   - turbo (qwen3.5:4b) runs with think=False (see generation._REASONING_RE), so the
+#     512 tokens are pure answer. 512 both fits a grounded answer and bounds a repetition
+#     loop (measured: qwen3.5:4b ran a 22k-char loop on q052, 266 s).
+#   - large (gemma4:e4b) is a *thinking* model: its hidden reasoning is drawn from the
+#     SAME budget before the answer starts. On a precise question (the whole golden set)
+#     reasoning is short and 512 is enough, but on an open / under-specified one the
+#     reasoning alone exceeds 512 and the answer comes back EMPTY (measured: "What is the
+#     inflation rate?" needed 1106 tokens = ~900 chars reasoning + answer; golden max was
+#     under 512 only because the questions name the exact metric). So large gets headroom
+#     over that measured worst case; turbo keeps the tight loop bound.
+LLM_NUM_PREDICT = 512  # default / turbo
+LLM_NUM_PREDICT_BY_MODEL = {
+    "gemma4:e4b": 1536,  # thinking (~700-900 tok) + answer, ~40% margin over measured 1106
+}
+
+
+def resolve_num_predict(model: str) -> int:
+    """The output cap for a concrete model name (not a tier alias)."""
+    return LLM_NUM_PREDICT_BY_MODEL.get(model, LLM_NUM_PREDICT)
+# How many reranked chunks are handed to the LLM. Matches the retrieval k the
+# reranker returns; the abstention gate reads the top chunk's score.
+GEN_K = 5
+
+# --- Abstention gate ---------------------------------------------------------
+# Two-stage, tuned to prioritise zero hallucination (Day 5). A single reranker-score
+# threshold cannot gate: measured on the golden set, the cross-lingual answerable
+# questions (q061/q062/q063) score 0.003-0.012 while an unanswerable one (q033,
+# yanlis_oncul) scores 0.952 — above 15 of 20 answerable rows. So one threshold either
+# admits hallucinations or sacrifices 7/20 answerable.
+#
+# Stage 1 (this threshold): a cheap reranker-score pre-filter set at the zero-false-
+# reject point — below the weakest answerable (min yanitla = 0.0032) and above the
+# blatantly off-topic (q071/q072 alan_disi ~0.0005). It therefore rejects ONLY the two
+# clearly-irrelevant questions before the LLM and never drops an answerable one. It is
+# deliberately weak; the real rejection burden is stage 2.
+# Stage 2 (generation.py): the LLM grounding/citation backstop is the authoritative
+# gate — it must catch the 8 remaining reddet rows (q033 included) that score inside
+# the answerable range. Calibrated on the golden set (n=20/10), so overfit risk is real
+# and recorded in DEVLOG rather than hidden.
+REJECT_THRESHOLD = 0.003

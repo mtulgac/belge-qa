@@ -135,7 +135,7 @@ iki değer birden gerekiyor).
 
 \* Başlangıç ayarının kaynağı üç farklı yer: `k=60` RRF'i öneren makaleden
   (Cormack, Clarke & Buettcher, 2009); **eşit ağırlık** orijinal formülün kendisi
-  (`Σ 1/(k+sıra)`, ağırlık kavramı yok — ağırlık ekleyerek formülün dışına çıkıldı);
+  (`Σ 1/(k+sıra)`, ağırlık kavramı yok. Ağırlık ekleyerek formülün dışına çıkıldı);
   `depth=50` ise yalnızca yaygın bir pratik değer, ölçüye dayanmıyor. Yani bu satır
   "literatürün önerdiği ayar" değil.
 
@@ -236,6 +236,83 @@ Tek eşik maliyeti (reranker skoru, [0,1]):
 
 
 
+## 3. Generation ve reddetme eşiği (Gün 5)
+
+### Metodoloji
+
+- **Uçtan uca:** golden set 30 soru, `RETRIEVER=rerank` (dense → cross-encoder),
+  `RERANK_DEPTH=10`, `GEN_K=5`, dijital varyant. Cevap sorunun dilinde, kaynak pasaj
+  numarasıyla; çıktı sınırı model bazlı (turbo 512 / large 1536, bkz. *Thinking politikası*).
+- **İki metrik:** (1) **Reddetme matrisi**, uydurma / gereksiz-red / doğru-red;
+  yalnız `reddedildi` bayrağına bakar. 
+  (2) **cevap
+  doğruluğu**, deterministik anahtar-eşleşme (sayı-norm + `token_set_ratio`, çapa alıntısına
+  karşı) ve opsiyonel **LLM yargıç** (gemma4:12b, offline). TR/EN **ayrı**.
+- **Öncelik:** sıfıra yakın uydurma.
+
+### Reddetme sinyali: reranker top-1 vs mean(top-5) (bge-m3, dense, depth 10)
+
+| sinyal | AUC | sıfır-uydurma eşiğinde tutulan yanitla |
+|---|---|---|
+| **reranker top-1** | **0.840** | **13/20** |
+| kosinüs top-1 | 0.790 | 11/20 |
+| reranker mean(top-5) | 0.750 | 7/20 |
+| kosinüs mean(top-5) | 0.720 | 9/20 |
+
+
+### Model karşılaştırması (depth 10, dijital varyant)
+
+| model | uydurma | gereksiz-red | doğru cevap (judge) | TR | EN | gecikme medyan / max |
+|---|---|---|---|---|---|---|
+| **large: gemma4:e4b** | **1/10** | 0/20 | 16/20 | 12/16 | 4/4 | 36.6 / 58.8 s |
+| turbo: qwen3.5:4b | 1/10 | 1/20 | 16/20 \* | 12/16 | 4/4 | 14.1 / 266.0 s |
+
+\* qwen3.5:4b'de q052 cevabı 22 bin karakterlik tekrar döngüsüne girdi, 266 s'lik max gecikme de bu soru.
+`num_predict=512` sınırı bunu keser.
+
+Kategori bazında (judge): `tek_belge` 9/9 (ikisi de), `capraz_dil` 3/3 (ikisi de),
+`tablo` large 3/4 / turbo 2/4, `celiski` large 0/2 / turbo 1/2. **Çelişki en zayıf halka.**
+
+Uydurma her iki modelde de **yalnız q022** (arXiv, yanıtlanamaz), LLM grounding'in sınırı.
+
+### Elenen modeller
+
+| model | eleme sebebi | sayı |
+|---|---|---|
+| qwen3.5:9b | uydurma (öncelik ekseni) | 3/10 (q022, q033, q034); cevap 15/20, gecikme medyan 20.2 s |
+| gemma4:12b | gecikme (CPU) | ~65 s/soru medyan (koşu 9/30'da durduruldu); offline yargıç oldu |
+
+### Depth 10 vs 20 (generation)
+
+| model | depth | doğru cevap (judge) | gecikme medyan |
+|---|---|---|---|
+| gemma4:e4b | 10 | 16/20 | 36.6 s |
+| gemma4:e4b | 20 | 16/20 | 41.9 s |
+| qwen3.5:4b | 10 | 16/20 | 14.1 s |
+| qwen3.5:4b | 20 | 17/20 | 17.8 s |
+
+Depth 20 tutarlı kazanç vermedi; q041 iki modelde de düzelmedi (`GEN_K=5` tavanı). Depth 10
+korundu.
+
+### Thinking (reasoning) politikası
+
+**gemma4:e4b (large): thinking açık vs kapalı** (tam golden set, depth 10):
+
+| | uydurma | gereksiz-red | doğru cevap | gecikme medyan / max |
+|---|---|---|---|---|
+| **think=ON (üretim)** | **1/10** (q022) | 0/20 | 15/20 | 36.6 / 58.8 s |
+| think=False | **4/10** (q022, q024, q033, q034) | 0/20 | 15/20 | **13.6** / 32.8 s |
+
+
+**qwen3.5:4b (turbo): think=True bütçe probe'u** (2 soru, num_predict 6000):
+
+| soru | done | eval (token) | thinking (karakter) | content |
+|---|---|---|---|---|
+| "What is the inflation rate?" | stop | 4605 | 17.499 | 438 |
+| "Tezli YL asgari GNO?" | length | **6000 (tavan doldu)** | 24.690 | **0 (boş)** |
+
+---
+
 ## Sınırlar
 
 Parsing / OCR:
@@ -257,7 +334,27 @@ Retrieval:
   o kısıt yok, dolayısıyla bugünkü değerin ölçülmüş bir gerekçesi de yok.
 - Tablo soruları doğru chunk'ı bulma seviyesinde %100; düzleşmiş tablodan doğru hücrenin
   okunması generation aşamasında ayrıca test edilecek.
-- **Reddetme eşiği hâlâ çözülmedi.** Kosinüs yetersizdi (AUC 0.790); reranker skoru
-  ölçüldü ve en iyi aday sinyal ama eşleşmeli testte kosinüsü n=20/10'da kesin yenmiyor
-  (Δ +0.05, CI 0'ı kapsıyor), ve tek eşik kuyruk çakışması yüzünden çalışmıyor
-  (0 uydurma için 7-14/20 yanıtlanabilir cevap feda ediliyor). 
+- **Reddetme eşiği tek başına çözmüyor** (5. günde iki aşamalı kapıya bağlandı). Kosinüs
+  yetersizdi (AUC 0.790); reranker skoru en iyi aday sinyaldi ama sıfır uydurma için 7-14/20 
+  yanıtlanabilir soru feda ediliyor. Çözüm: stage-1 ucuz eşik + stage-2 LLM grounding.
+
+Generation / reddetme:
+- **Örneklem yine küçük:** aynı 20/10 golden set. uydurma 1/10 ve doğru cevap 16/20 gibi
+  sayılar tek soruya duyarlı; kararlar öncelik (uydurma) ve worst-case dil üzerinden verildi.
+- **q022 kalıcı uydurma:** üç modelde de uyduruldu (arXiv, konu-içi yanıtlanamaz). Stage-1
+  skoru yüksek, stage-2 LLM de reddetmiyor. LLM grounding'in sınırı, çözülmedi.
+- **Çelişki en zayıf kategori** (large 0/2, turbo 1/2): q041 retrieval kaynaklı (3,00 chunk'ı
+  `GEN_K=5` dışında, depth 20 de çözmüyor), q042 generation (iki değeri kaynağıyla ayrıştırma).
+- **Tablo:** düzleşmiş tablodan yanlış hücre okunabiliyor (q051: %1,37 yerine %1,64). Doğru
+  chunk retrieval'da geliyor, hata generation'da.
+- **turbo degenerasyonu:** qwen3.5:4b bir soruda (q052) tekrar döngüsüne girdi (22k karakter,
+  266 s). `num_predict=512` sınırıyla bağlandı ama modelin bu eğilimi bir kalite notu.
+- **Gizli thinking / çıktı sınırı:** her iki model de 'düşünebiliyor'. large (gemma) thinking
+  açık kullanılıyor (faithfulness: uydurma 4/10→1/10) ama reasoning `num_predict`'ten harcanıyor;
+  dar golden sorularında sığıyordu, açık uçlu/belgede-olmayan-terim soruları 512'yi aşıp cevabı
+  boşaltıyordu. Model-bazlı sınır (large 1536) + boş cevap reddi ile bağlandı. turbo (qwen) think
+  kapalı (reasoning'i 4600-6000+ token, gecikmeden diskalifiye). Golden set gerçek kullanıcının
+  belirsiz sorularını yeterince temsil etmediği için bu bug'ı maskelemişti.
+- **Doğruluk metriği:** deterministik anahtar-eşleşme bir alt sınır (sayı doğru/bağlam yanlış
+  vakalarında false-positive, çapraz dilde eski sürümde false-negative, düzeltildi). LLM
+  yargıç zengin ama yargıç modelin kendi hatasını taşır; ikisi birlikte raporlanıyor.
