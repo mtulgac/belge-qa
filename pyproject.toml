@@ -5,26 +5,30 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "belge-qa"
 version = "0.1.0"
-description = "Document question answering (RAG) — Turkish and English"
+description = "Document question answering (RAG) system, Turkish and English"
 requires-python = ">=3.11"
 
+# Pinned to the versions every measurement in TESTING.md was produced with
+# (reproducibility; the same pins drive the Docker image).
 dependencies = [
-    "pymupdf",               # PDF text layer + page rendering
-    "pytesseract",           # OCR (system dependency: tesseract, tur+eng)
-    "opencv-python",         # preprocessing (photo class only)
-    "numpy",
-    "rapidfuzz",             # CER measurement and anchor matching
-    "pyyaml",                # golden set
-    "sentence-transformers", # multilingual embeddings
-    "ollama",                # on-prem LLM
+    "pymupdf==1.28.0",               # PDF text layer + page rendering
+    "pytesseract==0.3.13",           # OCR (system dependency: tesseract, tur+eng)
+    "opencv-python==5.0.0.93",       # preprocessing (photo class only)
+    "numpy==2.4.6",
+    "rapidfuzz==3.14.5",             # CER measurement and anchor matching
+    "pyyaml==6.0.3",                 # golden set
+    "sentence-transformers==5.6.1",  # multilingual embeddings + cross-encoder
+    "torch==2.13.0",                 # pinned explicitly: model outputs depend on it
+    "transformers==5.14.1",          # pinned explicitly: the Day-4 "pinned transformers"
+    "ollama==0.6.2",                 # on-prem LLM
+    "streamlit==1.60.0",             # web UI
 ]
 
 # OCR engines eliminated on Day 2. Needed only to re-run the bake-off, not to
 # run the system (see DEVLOG Day 2).
 [project.optional-dependencies]
-bakeoff = ["easyocr", "rapidocr", "onnxruntime"]
-# Cross-encoder reranker (Day 4). CrossEncoder ships with sentence-transformers;
-dev = ["pytest"]
+bakeoff = ["easyocr==1.7.2", "rapidocr==3.9.2", "onnxruntime==1.27.0"]
+dev = ["pytest==9.1.1"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -255,6 +255,10 @@ hâlâ makul bir tavan olabilir. Ancak bu haliyle ölçülmüş bir değer deği
 CPU'da hızlı çalışabilecek modelleri aynı korpus, aynı golden set ve aynı chunking ile karşılaştırdım.
 Test sonuçları TESTING.md'ye eklendi.
 
+*(Gün 6 düzeltmesi: buradaki süre ölçümleri aslında CPU'da değilmiş. sentence-transformers
+Apple Silicon'da cihazı otomatik seçiyor ve embedding MPS'te koştu. recall/MRR/AUC
+cihazdan bağımsız, model seçimi değişmiyor; ama ms/sorgu ve s/chunk değerleri GPU'lu sayılar.)*
+
 Bulgular:
 
 - **bge-m3 seçildi.** İki dilin worst-case'inde de önde. Bedeli sorgu başına 35 ms 
@@ -546,8 +550,11 @@ Kullanacağım modelleri embedding/reranker aşamalarındaki gibi **ölçerek** 
 
 Bulgular:
 
-- **gemma4:12b elendi:** CPU'da soru başına 50-160 s (medyan ~65 s), interaktif kullanım
-  imkânsız. Ama offline yargıç olarak geri döndü (aşağıda).
+- **gemma4:12b elendi:** soru başına 50-160 s (medyan ~65 s), interaktif kullanım
+  imkânsız. Ama offline yargıç olarak geri döndü (aşağıda). *(Gün 6 düzeltmesi: bunu
+  "CPU'da" diye kaydetmiştim; local Ollama aslında M2'nin GPU'sunu kullanıyormuş.
+  GPU'da bile bu sürelerdeyse GPU'suz CPU'da daha yavaş. Eleme kararı daha da güçlenerek
+  geçerli.)*
 - **qwen3.5:9b elendi:** cevap doğruluğunda tepedekilerle eşit (15/20) ama **uydurma 3/10**
   (q022, q033, q034). Projenin ilk önceliği sıfıra yakın uydurma; aynı boyuttaki gemma4:e4b
   1/10 yapıyor.
@@ -647,9 +654,9 @@ birini (`num_predict=512`) revize ettirdi, o yüzden buraya yazıyorum.
 
 - **turbo (qwen3.5:4b) uçtan uca çalışıyor**. Retrieval + reranker + HF cache + ollama +
   doğru citation eşleme.
-- **large (gemma4:e4b) modeli ~8 GB Docker VM'inde OOM hatası aldı.** ollama yüklerken tensörler ~8.5 GB
+- **large (gemma4:e4b) modeli ~8 GB Docker VM'inde OOM hatası aldı.** ollama yüklerken tensörler 8.5 GB
   (`load_tensors` 5903 + 2827 MiB), 7.75 GB'lik VM'e sığmıyor. Docker Desktop belleğini 12 GB'a 
-  çıkarınca çalıştı. **Dağıtım notu:** large modeli VM ≥~12 GB RAM ister, turbo 8 GB'ta çalışır.
+  çıkarınca çalıştı. **Dağıtım notu:** large modeli VM ≥12 GB RAM ister, turbo 8 GB'ta çalışır.
 
 ### Gemma modelinden boş cevap: gizli thinking × çıktı sınırı
 
@@ -678,7 +685,7 @@ Qwen ise thinking kapalı olduğu için 512 sadece cevap için yeterli. Ayrıca 
 'think' parametresinin seçilen modellere etkisini golden set'te ölçtüm (tablolar TESTING'de).
 
 - **gemma think=False:** cevaplanabilir sorularda **eşit performans** (15/20) ve **2.7× daha hızlı** 
-(medyan 13.6 vs 36.6 s) — ama **uydurma 1/10 → 4/10.** Cevap öncesi düşünme kapanınca 
+(medyan 13.6 vs 36.6 s) ama **uydurma 1/10 → 4/10.** Cevap öncesi düşünme kapanınca 
 yanlış-öncül/cevaplanamaz sorular (q024/q033/q034) cevaplanmaya başlıyor. Uydurma olmaması birinci
 öncelik → **gemma'da think açık kalıyor** (çıktı sınırı 1536 ile).
 - **qwen think=True:** qwen zaten `think=False` idi. Açınca reasoning'i **felaket uzun**,
@@ -692,7 +699,7 @@ Sonuç simetrik ve savunulabilir: **her modelin düşünme ayarı rolüyle gerek
 ### Kararlar
 
 - **Cevap üretme: iki mod.** `turbo` = qwen3.5:4b, `large` = gemma4:e4b, varsayılan `large`.
-  Elenenler: qwen3.5:9b (uydurma 3/10), gemma4:12b (CPU gecikmesi → offline yargıç).
+  Elenenler: qwen3.5:9b (uydurma 3/10), gemma4:12b (gecikme → offline yargıç).
 - **Reddetme: iki aşamalı.** Stage-1 reranker top-1 eşiği `0.003` (sıfır-yanlış-red), stage-2
   LLM grounding. Uydurma 1/10 (residual q022).
 - **Doğruluk ölçümü:** Deterministik anahtar-eşleşme (savunulabilir alt sınır) + opsiyonel
@@ -712,6 +719,99 @@ Sonuç simetrik ve savunulabilir: **her modelin düşünme ayarı rolüyle gerek
   kategorisi için GEN_K/depth artırılmalı mı? Runtime dil/kategori-kör olduğu için global olur.
 - **q051/q052:** tablo hücresi (yanlış hücre seçimi) ve turbo degenerasyonu. İkisi de
   generation tarafında.
-- Docker'da large modelin **gerçek CPU inference gecikmesi** ölçülmedi — local ~36 s MPS/GPU'lu;
+- Docker'da large modelin **gerçek CPU inference gecikmesi** ölçülmedi, local ~36 s MPS/GPU'lu;
   Docker CPU daha yavaş olacak, arayüzde bu daha da önemli.
 - Chunk boyutu/örtüşmesi hâlâ taranmadı.
+
+---
+
+## Gün 6 — 28.07.2026
+
+Bugün sistemin arayüzünü Streamlit ile tamamladım. Minimum arayüz isterleri birden fazla ve
+farklı türlerde belge yükleme ve indeksleme, soru sorma, cevapta kaynak belge + sayfa
+görüntüleyebilme, reddedilen sorunun net gösterimi ve turbo/large model seçimiydi.
+Arayüz geliştirmesi öncesinde repoyu düzenledim ve tekrarlanabilirlik için kullanılan 
+kütüphanelerin sürümlerini sabitledim. Arayüz bittikteon sonra Docker imaj testlerinde
+beklemediğim bir gecikme farkı çıktı; bu farkın teşhisi bugünün en öğretici bulgusu oldu.
+
+### Repo düzeni ve sürüm sabitleme
+
+- Çalışma boyunca kullandığım ölçüm kodlarının tamamı `eval/` klasörüne taşındı. Scriptler 
+artık çalışma dizininden bağımsız (path'ler `config.ROOT` üzerinden tanımlanıyor). Taşımanın
+hiçbir şeyi bozmadığını testlerle doğruladım. Dense ve reranked retrieval eval kodları 
+önceki sonuçların birebir aynısını üretti.
+
+- `pyproject.toml`'da listelenen kütüphaneler, kurulu sürümlere `==` ile sabitlendi. 
+`torch` ve `transformers` daha önce dolaylı bağımlılıktı; model davranışını doğrudan
+belirledikleri için açıkça listeye alındı, Docker imajı da aynı sürümleri kuruyor. 
+Gerekçe basit: raporladığım sonuçlar, kurulumu sıfırdan yapan birinde de aynı çıkmalı.
+
+### Arayüz kurulumu
+
+Framework olarak Streamlit seçtim çünkü arayüz isteri bir ürünün frontend'i değil 
+çalışan bir demo. Streamlit sayesinde arayüz tek dosyayla çözülüyor ve kod dili aynı kalıyor.
+Arayüz (`webui.py`) yalnız `pipeline.answer`'ı çağırıyor, bu sayede retrieval, reddetme ve 
+cevap üretiminin tek yerde tanımlı olması kararı arayüzde de korunmuş oldu. 
+UI kodu hiçbir arama/üretim mantığı içermiyor.
+
+### Arayüzdeki "alakasız pasajlar"
+
+Arayüzdeki testlerde düşük skorlu (0.01 ve altı) pasajları görünce ilk bakışta bir hata gibi durdu.
+Soruyla ilgisiz pasajlar neden modele gidiyor diye düşündüm. Fakat oluşturduğumuz sistem 
+her soruda en yüksek skorlu 5 pasajı modele veriyor ve düşük skorlular da recall güvencesi. 
+Bunları bir skor eşiğiyle elemek Gün 5 ölçümüyle doğrudan çelişiyor: çapraz-dil sorularında **doğru cevabı
+içeren** pasaj 0.003-0.012 skorluyor; buradaki 0.003'ü eleyecek her eşik o cevapları da
+elerdi. Düzeltme pasajları filtrelemek değil sunumu netleştirmek oldu: LLM tarafından cevapta gerçekten
+kullanılan pasajlar ✅ ile işaretleniyor ve arayüzde tek cümlelik açıklama var. Model zaten
+yalnız ilgili pasajı kullanıp kaynak gösteriyordu; sorun davranış değil, arayüzün bunu
+anlatmamasıydı.
+
+### Docker gecikme teşhisi: GPU farkı
+
+Docker'da soru başına turbo ~60-75 s, large ~150 s ölçtüm; local testlerde aynı sorular 14 / 37 s
+sürüyordu. Gün 5'in açık sorusu ("Docker'da gerçek CPU gecikmesi") böylece cevaplandı ama sebep
+beklediğim gibi "sanallaştırma yükü" değil: **local Ollama, M2'nin entegre GPU'sunu Metal
+üzerinden kullanıyormuş** (`ollama ps` → `PROCESSOR: 100% GPU`), Docker Desktop'ın Linux
+VM'ine ise GPU geçmiyor (container logu: `inference compute id=cpu`). Yani şimdiye kadar
+"local CPU" sandığım LLM sayıları aslında GPU'luydu; Dockerdaki süreler GPU'suz on-prem
+CPU'nun dürüst maliyeti. Reranker'da aynı tuzağı 4. günde yakalamıştım (MPS), LLM tarafında
+ancak Docker karşılaştırması görünür kıldı.
+
+### Chunk parametre taraması
+
+Retrieval aşamasında yapmadığım chunk boyutu ve örtüşme parametreleri için bir test yaptım.
+12 farklı parametre kombinasyonunda yaptığım testlerde, şu anki parametreleri değiştirmeme
+sebep olacak bir fark çıkmadı. (Sonuçlar TESTING.md'de)
+
+Bulgular:
+
+- **Chunk boyutunun tutarlı bir etkisi yok.** recall@5 %80-92.5 arasında zıplıyor ama
+  bir örüntü yok, komşu kombinasyonlar arasındaki 5-10 puanlık farklar tek bir sorunun 
+  chunk sınırına denk gelip gelmemesinden geliyor (n=20'de bir soru 5 puan).
+- Tek tutarlı örüntü: **küçük chunk (600) arXiv sorusunu (q009, EN) dense top-5'e
+  sokuyor** (EN %75 → %100), karşılığında q011 (TR) düşüyor (TR %93.8 → %90.6). Gün
+  4'teki hibrit retrieval takasının birebir aynısı. Ama reranker q009'u dense'in top-10'undan
+  zaten kurtarıyor; yani bu kazanç uçtan uca sistemde **tekrarlanıyor**.
+- **Karar: 800/150 parametreleri korundu.** Değişiklik uçtan uca kazanç vaat etmiyor; mevcut değerler
+  artık "makul başlangıç" değil, **ölçülüp yerinde bırakılmış** değerler.
+
+### Kararlar
+
+- Arayüz: **Streamlit, tek dosya, yalnızca `pipeline.answer`** üzerinden cevap üretimi.
+- Runtime indeks **boş başlar**, aynı isimli doküman yüklenirse güncelle; runtime indeks
+ölçüm indekslerinden tamamen ayrı. Docker'da named volume ile kalıcı.
+- **Tek tur konuşma + görsel geçmiş**; çoklu-tur ölçülemediği için eklenmedi (sistem sınırı).
+- İlerleme **aşama aşama**, cevap **streaming** şeklinde gösteriliyor.
+- Tanılama panelinde **pasaj filtresi yok** LLM tarafından kullanılan kaynak ✅ ile işaretleniyor.
+- Bağımlılıklar **sürüm sabitli**; ölçüm scriptleri `eval/` altında.
+- **Reddedilen soruda kaynak/pasaj gösterilmez**.
+- **Varsayılan tier turbo** Gün 5 revizyonu, UI deneyimi sonrasında tercihim değişti.
+- Gün 3-5'teki süre ölçümlerinin cihaz etiketleri düzeltildi (embedding MPS, reranker CPU,
+  LLM Metal).
+
+### Açık sorular
+
+- Generation testindeki hatalar (q022, q041, q051, q052) incelenemedi.
+- Ollama ~5 dk boşta kalan modeli bellekten atıyor; tier değişimi/uzun ara sonrası ilk soru
+  model yükleme süresi ödüyor. `keep_alive` ile sabitleme ölçülmedi (iki model birden
+  bellekte: RAM maliyeti var).

@@ -39,7 +39,7 @@ Judge only the facts. Ignore wording, language (Turkish vs English), number form
 
 
 def _verdict(raw: str) -> tuple[bool, bool]:
-    
+
     u = unicodedata.normalize("NFKC", _strip_thinking(raw)).upper()
     has_dogru = "DOĞRU" in u or "DOGRU" in u
     has_yanlis = "YANLIŞ" in u or "YANLIS" in u
@@ -48,14 +48,14 @@ def _verdict(raw: str) -> tuple[bool, bool]:
     if has_yanlis and not has_dogru:
         return False, True
     if not has_dogru and not has_yanlis:
-        return False, False  # unparsed — caller warns
+        return False, False  # unparsed: caller warns
     i_d = min((u.find(x) for x in ("DOĞRU", "DOGRU") if x in u), default=1 << 30)
     i_y = min((u.find(x) for x in ("YANLIŞ", "YANLIS") if x in u), default=1 << 30)
     return i_d < i_y, True
 
 
 def judge_one(judge_model: str, soru: str, referans: str, cevap: str) -> tuple[bool, bool, str]:
-    
+
     user = f"SORU:\n{soru}\n\nREFERANS CEVAP:\n{referans}\n\nSİSTEM CEVABI:\n{cevap}"
     kwargs = dict(
         model=judge_model,
@@ -73,7 +73,7 @@ def judge_one(judge_model: str, soru: str, referans: str, cevap: str) -> tuple[b
 
 
 def _deterministic_ok(row_id: str, variant: str, cevap: str) -> bool:
-    
+
     anchors = expected_anchors(_GOLDEN[row_id], variant)
     return bool(anchors) and all(answer_covers(cevap, a["alinti"]) for a in anchors)
 

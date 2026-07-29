@@ -67,7 +67,7 @@ def main() -> None:
         results[f"bm25_{token}"] = m
         row(f"{token}  ({notes[token]})", m)
     # A silent max() would hand back an arbitrary winner when the two tie, and on
-    # this golden set they do — that tie is the finding, not a detail to smooth over.
+    # this golden set they do: that tie is the finding, not a detail to smooth over.
     scores = {t: (m["recall_tr"], m["recall_en"], m["mrr"]) for t, m in tokenizers.items()}
     top = max(scores.values())
     tied = [t for t, s in scores.items() if s == top]

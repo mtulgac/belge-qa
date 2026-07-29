@@ -30,7 +30,7 @@ from app.ocr import is_photo, method_ocr_preprocessed, method_ocr_raw, page_imag
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg"}
 
 # A sentence end followed by the start of a new one. Turkish capitals are listed
-# explicitly — [A-Z] alone would miss "Öğrenci", "İlgili", "Şu".
+# explicitly: [A-Z] alone would miss "Öğrenci", "İlgili", "Şu".
 SENTENCE_SPLIT = re.compile(r"(?<=[.!?…])\s+(?=[A-ZÇĞİÖŞÜ0-9(])")
 
 
@@ -45,14 +45,6 @@ class Chunk:
 
 
 def normalize(text: str) -> str:
-    """NFKC, de-hyphenate, collapse whitespace.
-
-    NFKC rather than the bake-off's NFC: typographic ligatures survive the text
-    layer (arXiv stores "ﬁlter" as U+FB01), so without the compatibility fold a
-    search for "filter" never matches that chunk. evaluate.py stays on NFC —
-    there the ligature is a real difference between two extractions, and folding
-    it away would hide it.
-    """
     text = unicodedata.normalize("NFKC", text)
     text = re.sub(r"-\s*\n\s*", "", text)   # de-hyphenate word breaks
     text = re.sub(r"\s+", " ", text)        # collapse all whitespace
@@ -86,12 +78,6 @@ def extract_pages(path: Path) -> list[tuple[str, str]]:
 
 
 def _stitch(pages: list[tuple[str, str]]) -> tuple[str, list[int], list[str]]:
-    """Join the page texts into one stream, keeping each page's start offset.
-
-    Chunking runs over the whole document rather than page by page, so a sentence
-    that runs across a page break stays whole (Day 1 finding); the page number is
-    recovered from the offset afterwards.
-    """
     parts, starts, methods = [], [], []
     offset = 0
     for text, method in pages:
@@ -103,12 +89,6 @@ def _stitch(pages: list[tuple[str, str]]) -> tuple[str, list[int], list[str]]:
 
 
 def _sentences(text: str) -> list[tuple[int, str]]:
-    """(start offset, sentence) pairs, none longer than CHUNK_TARGET.
-
-    Sentence granularity alone leaves pieces that are far too long: a definitions
-    article carries no sentence end at all. Those are cut at word boundaries, so
-    a chunk can still be bounded without splitting a word.
-    """
     out, pos = [], 0
     for piece in SENTENCE_SPLIT.split(text):
         start = text.find(piece, pos)
@@ -210,7 +190,6 @@ def embed(chunks: list[Chunk], model_name: str = EMBEDDING_MODEL) -> np.ndarray:
 
 
 def index_dir(variant: str = DEFAULT_VARIANT, model_name: str = EMBEDDING_MODEL) -> Path:
-    """One index per (variant, model) — comparing models must not overwrite."""
     return INDEX_DIR / Path(variant).stem / model_slug(model_name)
 
 

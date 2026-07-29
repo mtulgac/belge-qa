@@ -6,7 +6,7 @@ from app.config import RERANK_DEVICE, RERANK_MODEL
 
 
 # maxsize=1: a reranker is 0.5-2 GB resident and the candidate sweep loads them in
-# turn, so holding more than the one in use costs memory it never pays back —
+# turn, so holding more than the one in use costs memory it never pays back
 # the same reasoning as retrieval._encoder.
 @lru_cache(maxsize=1)
 def _cross_encoder(model_name: str = RERANK_MODEL, device: str = RERANK_DEVICE):

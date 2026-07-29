@@ -16,8 +16,6 @@ CANDIDATES = [
 
 
 def query_latency(rows: list[dict], model: str) -> float:
-    """Milliseconds to embed one question — the cost the user waits for on every
-    query, as opposed to the indexing cost they pay once per upload."""
     embed_query("ısınma", model)                      # warm up: model load excluded
     t0 = time.perf_counter()
     for row in rows:

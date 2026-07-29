@@ -98,7 +98,7 @@ def score_stats(values: list[float]) -> str:
 
 
 def threshold_confusion(yes: list[float], no: list[float]) -> dict:
-    
+
     n_yes, n_no = len(yes), len(no)
 
     def confusion(t: float) -> tuple[int, int]:

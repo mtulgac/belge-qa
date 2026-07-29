@@ -1,0 +1,15 @@
+# Web UI theme (webui.py), fixed to dark.
+# Source chips are :blue-badge in webui.py, so the blue* keys carry the navy;
+# on the dark background a lightened navy is used for contrast.
+[theme]
+base = "dark"
+font = "sans-serif"
+headingFont = "sans-serif"
+primaryColor = "#DD140E"
+
+[theme.dark]
+backgroundColor = "#18181D"
+secondaryBackgroundColor = "#24242C"
+linkColor = "#8A9AE0"
+blueTextColor = "#8A9AE0"
+blueBackgroundColor = "#1B2452"

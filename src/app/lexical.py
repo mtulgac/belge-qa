@@ -7,20 +7,14 @@ import numpy as np
 
 # Turkish dotted capital: "İ".lower() is "i" + U+0307 COMBINING DOT ABOVE, two
 # codepoints, so "İTÜ" and "itü" would not compare equal and every proper noun
-# starting with İ would silently fail to match. Stripped unconditionally — this
-# is a normalization fix, not a language branch (the system never knows the
-# document's or the query's language).
+# starting with İ would silently fail to match.
 COMBINING_DOT = "̇"
 
 # The standard word split. Keeps letters and digits, drops everything else.
 TOKEN_SPLIT = re.compile(r"\w+", re.UNICODE)
 
 # The same, except a separator that sits *between* two word characters does not
-# break the token. BM25's job in this system is exact matches on names, numbers
-# and identifiers, and \w+ destroys exactly those: "2,50" becomes "2" and "50",
-# both of which occur all over the corpus and carry almost no IDF, so the exact
-# match the query was counting on disappears. Kept whole: 2,50 | %10.6 |
-# arXiv:2104.13437 | madde 24/A | 2020-2021.
+# break the token.
 TOKEN_KEEP = re.compile(r"\w+(?:[.,/:\-]\w+)*", re.UNICODE)
 
 TOKEN_PATTERNS = {"split": TOKEN_SPLIT, "keep": TOKEN_KEEP}

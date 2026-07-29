@@ -116,7 +116,7 @@ def check_anchor(kaynak: dict) -> tuple[str, str]:
 
 
 def check_labels(row: dict) -> list[str]:
-    """Category / language / expectation consistency — no PDF needed."""
+    """Category / language / expectation consistency, no PDF needed."""
     issues = []
     rid = row.get("id", "?")
     kategori = row.get("kategori")
@@ -171,7 +171,7 @@ def check_labels(row: dict) -> list[str]:
 
     # Anchors are matched by substring, so a bare number can land in the wrong
     # place. Table questions are exempt: OCR flattens rows and columns, which
-    # makes a longer quote the more brittle anchor there — the cell value is
+    # makes a longer quote the more brittle anchor there, the cell value is
     # deliberately the anchor.
     if kategori != "tablo":
         for k in kaynak:
@@ -199,7 +199,7 @@ def coverage(rows: list[dict]) -> None:
     print("-" * 74)
     # Only indexed documents can be a source. The variant group counts as one
     # slot (the same content in three formats), and anything outside the corpus
-    # is an OCR-test asset, not an answer source — neither is "missing".
+    # is an OCR-test asset, not an answer source, neither is "missing".
     for name in corpus():
         n = used.get(name, 0)
         note = "" if n else "   <- never used"
@@ -217,14 +217,6 @@ def coverage(rows: list[dict]) -> None:
 
 
 def check_index(rows: list[dict], variant: str) -> list[str]:
-    """Locate every anchor inside the built index, not just in the source PDF.
-
-    Between the two lies chunking, and this is where it can go wrong: the quote
-    can be cut across a chunk boundary (then no single chunk answers the
-    question), or the chunk can carry the wrong page number (then the answer is
-    cited to the wrong page). Both are silent failures for retrieval, so they
-    get measured before the harness is built on top.
-    """
     path = index_dir(variant) / "chunks.json"
     if not path.exists():
         return [f"index missing: {path} (run: python -m app.ingest --variant {variant})"]
@@ -325,8 +317,8 @@ def main() -> None:
         problems += check_labels(row)
         kaynak = row.get("kaynak") or []
         if _variants:
-            # Variant mode answers one question — do the anchors survive the
-            # other format? — so only the swapped document's rows are shown.
+            # Variant mode answers one question: do the anchors survive the
+            # other format? so only the swapped document's rows are shown.
             kaynak = [k for k in kaynak if k.get("dosya") in _variants]
         for k in kaynak:
             status, detail = check_anchor(k)

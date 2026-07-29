@@ -20,7 +20,7 @@ def _ask(question: str, model: str) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Belge QA — soru sor veya reddet.")
+    parser = argparse.ArgumentParser(description="Doküman Bilgi Erişim: soru sor veya reddet.")
     parser.add_argument("soru", nargs="*", help="soru (boşsa etkileşimli mod)")
     parser.add_argument("--tier", choices=list(LLM_TIERS), default=LLM_DEFAULT_TIER,
                         help=f"turbo (hızlı) | large (kaliteli); varsayılan {LLM_DEFAULT_TIER}")

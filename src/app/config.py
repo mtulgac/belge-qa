@@ -5,6 +5,14 @@ SAMPLES = ROOT / "data" / "samples"
 INDEX_DIR = ROOT / "data" / "index"
 GOLDEN_SET = ROOT / "data" / "golden_qa_sablon.yaml"
 
+# Web UI runtime state. Uploaded files land in UPLOADS_DIR; their index lives under
+# data/index/runtime/ via the same index_dir() layout as the measured variants, so
+# retrieval needs no special case. RUNTIME_VARIANT is passed wherever a variant goes.
+# Starts EMPTY (user decision): the UI searches only what the user uploaded; the baked
+# corpus indexes stay measurement-only. Both paths are Docker named volumes.
+UPLOADS_DIR = ROOT / "data" / "uploads"
+RUNTIME_VARIANT = "runtime"
+
 # --- Corpus ------------------------------------------------------------------
 # The indexed documents. yonetmelik_ss.png and yonetmelik_foto.jpeg are NOT here:
 # both are page 1 of the regulation and exist as OCR-test assets (the difficulty
@@ -20,7 +28,7 @@ CORPUS = [
 # The same content in three formats. Exactly ONE of them is in the index at a
 # time: with all three, every answer comes back in triplicate and precision
 # cannot be measured. The main retrieval test runs on the default variant; the
-# other two are a separate test. In that test, format is the only variable, 
+# other two are a separate test. In that test, format is the only variable,
 # so the metric delta is the cost OCR imposes on retrieval.
 VARIANT_GROUP = [
     "tobb_yonetmelik.pdf",   # digital text layer
@@ -53,30 +61,22 @@ def corpus(variant: str = DEFAULT_VARIANT) -> list[str]:
 
 
 # --- Chunking ----------------------------------------------------------------
-# Reasonable starting values, NOT yet swept — Day 4 went to retrieval/reranking
-# instead, so target/overlap stay defaults rather than measured picks. To be swept
-# together with CHUNK_MAX (see below).
+# Swept Day 6 (sweep_chunk.py): 12 configs, target 600-1200 x overlap 100-200,
+# dense on the golden set. No monotonic chunk-size effect, so the difference is
+# redundant end-to-end. 800/150 held, now a measured pick, not a default. Table in TESTING.md.
 CHUNK_TARGET = 800       # characters
 CHUNK_OVERLAP = 150      # characters
 CHUNK_MIN = 200          # a piece shorter than this is merged into the previous one
-# Hard ceiling. Sentence granularity alone is not enough: a definitions article
-# ("MADDE 3- (1) ... a) ... b) ...") holds no sentence end and ran to 3302
-# characters, past e5-small's 512-token window — the tail of such a chunk never
-# reached the vector, silently. That window stopped being the binding constraint
-# when bge-m3 (8192 tokens) was frozen as the model, so the ceiling now rests on
-# chunk size affecting retrieval precision, which at this value is unmeasured.
-# It is swept together with target/overlap rather than kept as a settled number.
+
+# Swept Day 6 as 2x target (see CHUNK_TARGET): no separate gain, so 1600 stays.
 CHUNK_MAX = 1600
 
 # --- Embedding ---------------------------------------------------------------
 # One multilingual model: separate TR and EN models would mean two vector spaces
 # and "Turkish question -> English document" would stop working.
 
-# Frozen by measurement (sweep_models.py, 4 candidates, k=5): bge-m3 leads on the
-# worst-case language, TR 93.8% / EN 75.0% against 62.5% / 75.0% for the best of
-# the rest, and it is the only candidate that does not lose ground cross-lingually
-# — the e5 family collapses there, a family trait rather than a size one. The cost
-# is ~35 ms per query and ~0.46 s per chunk at index time. Table in TESTING.md.
+# Frozen by measurement (sweep_models.py, 4 candidates, k=5):
+# bge-m3 leads on the worst-case language.
 EMBEDDING_MODEL = "BAAI/bge-m3"
 
 # The e5 family expects these prefixes and degrades silently without them; other
@@ -99,132 +99,57 @@ def model_slug(model_name: str) -> str:
 
 
 # --- Retrieval ---------------------------------------------------------------
-# Dense and BM25 answer different questions: the embedding matches meaning across
-# wording and across languages, BM25 matches the literal string. The second is
-# what a document corpus needs for article numbers, grade thresholds and proper
-# nouns, where being close in meaning is worthless.
-# Frozen to "rerank" (dense -> cross-encoder) as the runtime path. The base
-# ablation showed reranking dense's top-`depth` matches or beats reranking the
-# hybrid's (97.5% vs 95.0% at depth 20), because the reranker recovers q009 — the
-# proper-noun question BM25 was added for — from the dense pool. Fusion is therefore
-# redundant in front of the reranker; "hibrit" and "bm25" stay selectable as the
-# measured evidence that led here, not as the path. See the Reranking block below and
-# TESTING.md. (Flipped from "hibrit" on Day 5 when pipeline.py landed — until then the
-# default was left on hibrit so eval did not silently require the reranker model.)
+# Frozen to "rerank" (dense -> cross-encoder) as the runtime path.
+# See the Reranking block in TESTING.md.
 RETRIEVER = "rerank"     # dense | bm25 | hibrit | rerank
 
 # Reciprocal Rank Fusion. Rank-based rather than a weighted sum of scores, and
-# the reason is structural rather than measured: on the capraz_dil questions
-# (Turkish query, English document) BM25 has zero term overlap by construction,
-# and a weighted sum would let those zeros drag down rows where dense is at 100%.
+# the reason is structural rather than measured.
 # In RRF a retriever that does not rank a chunk simply contributes nothing to it.
 RRF_K = 10               # the constant in w/(RRF_K + rank); the paper's 60 flattens
                          # the top ranks and measured no better here
-RRF_DEPTH = 20           # candidates per retriever before fusing. At 50 the hybrid
-                         # loses to dense outright (82.5%) and drops capraz_dil to
-                         # 66.7%: past its confident hits BM25 contributes noise
-                         # that still carries a full vote.
-# (dense, bm25). Equal weight is an assumption, not a neutral default: BM25 alone
-# reaches 62.5% recall@5 here against dense's 90.0%, so at 1:1 the weaker list
-# outvotes the stronger one wherever it is merely noisy — measured, 1:1 costs 10
-# points of Turkish recall at depth 20. 3:1 measured identical to 2:1.
+RRF_DEPTH = 20           # candidates per retriever before fusing.
+# (dense, bm25). Equal weight is an assumption, not a neutral default.
 RRF_WEIGHTS = (2.0, 1.0)
 
-# Okapi defaults. NOT swept — recorded as unswept rather than presented as chosen.
+# Okapi defaults. NOT swept, recorded as unswept rather than presented as chosen.
 BM25_K1 = 1.5
 BM25_B = 0.75
 
 # Which token pattern app.lexical uses. "keep" holds numbers and identifiers
 # together ("2,50" stays one token instead of becoming "2" and "50"); "split" is
 # the plain \w+ baseline.
-#
-# NOT settled by the golden set: the two tie on every metric, alone and inside the
-# hybrid. "keep" is here on an isolated test instead — querying "2,50" under
-# "split" ranks a document containing "2 yıl ... 50 kredi" ABOVE the one that
-# actually says 2,50, because the fragments are common enough to carry no IDF.
-# The golden set holds no question that reaches that failure, so on the real
-# corpus this axis is unmeasured, not decided.
 BM25_TOKEN = "keep"
 
 # --- Reranking ---------------------------------------------------------------
-# A cross-encoder over the base retriever's candidates: it scores each
-# (question, chunk) pair jointly in one forward pass, instead of comparing two
-# independently built embeddings. That joint view is why it is the candidate
-# abstention signal — a single cosine could not separate answerable from
-# unanswerable (Day 3: AUC 0.790, 8/10 reddet rows inside the yanitla range) and
-# the RRF score is bounded flat.
-#
-# Frozen Day 4. The 30-question golden set cannot separate bge from the 118M mmarco
-# (both hit the 97.5% recall ceiling) — an inability to measure, not evidence of
-# equality — so the choice falls to prior + abstention: bge is genuinely
-# multilingual / TR-strong and its abstention signal is cleaner (AUC 0.840 vs
-# 0.800). mmarco stays the equivalent, lighter alternative (wins latency only on
-# short chunks). Latency was measured FIRST (bench_rerank.py) because a cross-encoder
-# is structurally expensive — one pass per candidate — then recall/abstention
-# (sweep_rerank.py).
+
+# Frozen in Day 4.
 RERANK_MODEL = "BAAI/bge-reranker-v2-m3"
 
-# Spread across the size axis so the latency x recall curve is visible. The pick
-# is frozen only after measurement — this list is the search space, not a ranking.
-# gte-multilingual and jina-reranker-v2 were dropped: both ship custom remote code
-# that is incompatible with the pinned transformers (jina fails to import, gte
-# crashes mid-scoring), so the standard-architecture pair is what we measure.
 RERANK_CANDIDATES = [
-    "BAAI/bge-reranker-v2-m3",                     # 568M — quality ceiling
-    "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1",  # 118M — fastest, TR coverage unknown
+    "BAAI/bge-reranker-v2-m3",                     # 568M, quality ceiling
+    "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1",  # 118M, fastest, TR coverage unknown
 ]
 
-# How many base candidates the cross-encoder re-scores — the direct driver of
-# rerank latency, one forward pass each. Frozen at 10 (swept 5/10/20): recall@5
-# 95.0% at ~3.3 s/query on this CPU against depth 20's 97.5% at ~6.9 s. The +2.5 is
-# a single çelişki anchor (q041), not worth 2x latency; depth 10 still beats hybrid
-# (92.5%) and dense (90.0%), and abstention is depth-independent. Whatever depth is
-# fed, the reranker still returns the top-k.
+# How many base candidates the cross-encoder re-scores, the direct driver of
+# rerank latency, one forward pass each. Frozen at 10 (swept 5/10/20).
 RERANK_DEPTH = 10
 
-# Which retriever produces the candidates the reranker re-scores. Frozen to "dense"
-# by the base ablation: reranking dense's top-`depth` matches or beats reranking the
-# hybrid's (97.5% vs 95.0% at depth 20), because the reranker recovers q009 — the
-# proper-noun question BM25 was added for — from the dense pool's top-20. Fusion is
-# therefore redundant in front of the reranker; hibrit stays in the repo as measured
-# evidence, not the path.
+# Which retriever produces the candidates the reranker re-scores. Frozen to "dense".
 RERANK_BASE = "dense"    # hibrit | dense
 
-# Device for the reranker forward pass. Pinned to CPU on purpose: the on-prem
-# target has no GPU (the project's on-prem assumption), and sentence-transformers
-# otherwise auto-selects MPS on Apple Silicon — which both mislabels the latency
-# (measured: MPS hides a 7x model-size gap behind a per-call dispatch floor) and
-# ties the scores to the dev machine. CPU keeps latency honest for the deployment
-# target and keeps recall reproducible across machines. Measured per-pair cost is
-# model- and chunk-length-dependent (bench_rerank.py).
+# Device for the reranker forward pass. Pinned to CPU on purpose.
 RERANK_DEVICE = "cpu"
 
 # --- Generation (LLM) --------------------------------------------------------
-# On-prem via Ollama: the system is assumed to run on company documents, so the LLM
-# stays local (the same reasoning that put VLM-OCR out of scope). Deploy target has
-# no GPU, so candidates are capped at ~7-12B — larger is unusable on CPU.
-#
 # Two production tiers, user-selectable (the web UI exposes turbo/large). Both frozen
-# by eval_generation.py on the golden set, chosen on the project's priority — zero
-# hallucination — which the abstention matrix measures directly (unaffected by the
-# content matcher). Measured, TR 16 / EN 4:
-#   large  gemma4:e4b   — uydurma 1/10, gereksiz-red 0/20, doğru cevap 15/20. Best on
-#                         the priority AND tied-best on answers. Cost: ~36 s/query CPU.
-#   turbo  qwen3.5:4b   — uydurma 1/10, gereksiz-red 1/20, doğru cevap 14/20. Near-equal
-#                         quality at ~11 s/query (3x faster) — the interactive default.
-# Dropped: qwen3.5:9b (uydurma 3/10 — fails the priority despite tying on answers) and
-# gemma4:12b (50-160 s/query, unusable on the on-prem CPU target). Reasoning models were
-# excluded up front: their <think> traces inflate CPU latency and complicate the
-# deterministic sentinel/citation parse (generation.py still strips <think> defensively).
-# NOTE (2026-07): qwen3.5 / gemma4 tags are newer than this code — verify the exact size
-# labels at `ollama pull` time.
+# by eval_generation.py on the golden set, chosen on the project's priority.
 LLM_TIERS = {
     "turbo": "qwen3.5:4b",   # fast, interactive
     "large": "gemma4:e4b",   # best faithfulness / lowest hallucination
 }
-# large is the default: faithfulness is the graded priority, and the UI lets a user
-# trade it for turbo's speed. Resolved to a concrete model for pipeline/cli/eval.
-LLM_DEFAULT_TIER = "large"
+# turbo is the default: interactive latency wins for the demo UI
+LLM_DEFAULT_TIER = "turbo"
 LLM_MODEL = LLM_TIERS[LLM_DEFAULT_TIER]
 # The eval set going forward is the two production models; the wider sweep that picked
 # them is recorded in DEVLOG/TESTING, not re-run by default.
@@ -238,11 +163,6 @@ def resolve_model(tier_or_name: str) -> str:
 
 
 # The LLM-as-judge model for judge_generation.py (optional offline correctness layer).
-# Two rules, both because a judge that grades its own output is biased lenient:
-#   - independent of the evaluated models (outside the turbo/large set), and
-#   - as strong as possible — judging runs OFFLINE over saved answers, so the latency
-#     that ruled gemma4:12b out of production is irrelevant here, which makes it a good
-#     judge. A larger model pulled just for judging is even better.
 JUDGE_MODEL = "gemma4:12b"
 
 # Grounded extraction, not open generation: temperature 0 so the answer is
@@ -251,18 +171,6 @@ LLM_TEMPERATURE = 0.0
 # Ollama context window. bge-m3 chunks cap ~512 tokens; GEN_K of them plus the
 # prompt fits comfortably, and Ollama truncates silently past num_ctx otherwise.
 LLM_NUM_CTX = 8192
-# Output cap (num_predict), per-model — the two production models spend the budget
-# differently:
-#   - turbo (qwen3.5:4b) runs with think=False (see generation._REASONING_RE), so the
-#     512 tokens are pure answer. 512 both fits a grounded answer and bounds a repetition
-#     loop (measured: qwen3.5:4b ran a 22k-char loop on q052, 266 s).
-#   - large (gemma4:e4b) is a *thinking* model: its hidden reasoning is drawn from the
-#     SAME budget before the answer starts. On a precise question (the whole golden set)
-#     reasoning is short and 512 is enough, but on an open / under-specified one the
-#     reasoning alone exceeds 512 and the answer comes back EMPTY (measured: "What is the
-#     inflation rate?" needed 1106 tokens = ~900 chars reasoning + answer; golden max was
-#     under 512 only because the questions name the exact metric). So large gets headroom
-#     over that measured worst case; turbo keeps the tight loop bound.
 LLM_NUM_PREDICT = 512  # default / turbo
 LLM_NUM_PREDICT_BY_MODEL = {
     "gemma4:e4b": 1536,  # thinking (~700-900 tok) + answer, ~40% margin over measured 1106
@@ -272,24 +180,10 @@ LLM_NUM_PREDICT_BY_MODEL = {
 def resolve_num_predict(model: str) -> int:
     """The output cap for a concrete model name (not a tier alias)."""
     return LLM_NUM_PREDICT_BY_MODEL.get(model, LLM_NUM_PREDICT)
+
 # How many reranked chunks are handed to the LLM. Matches the retrieval k the
 # reranker returns; the abstention gate reads the top chunk's score.
 GEN_K = 5
 
 # --- Abstention gate ---------------------------------------------------------
-# Two-stage, tuned to prioritise zero hallucination (Day 5). A single reranker-score
-# threshold cannot gate: measured on the golden set, the cross-lingual answerable
-# questions (q061/q062/q063) score 0.003-0.012 while an unanswerable one (q033,
-# yanlis_oncul) scores 0.952 — above 15 of 20 answerable rows. So one threshold either
-# admits hallucinations or sacrifices 7/20 answerable.
-#
-# Stage 1 (this threshold): a cheap reranker-score pre-filter set at the zero-false-
-# reject point — below the weakest answerable (min yanitla = 0.0032) and above the
-# blatantly off-topic (q071/q072 alan_disi ~0.0005). It therefore rejects ONLY the two
-# clearly-irrelevant questions before the LLM and never drops an answerable one. It is
-# deliberately weak; the real rejection burden is stage 2.
-# Stage 2 (generation.py): the LLM grounding/citation backstop is the authoritative
-# gate — it must catch the 8 remaining reddet rows (q033 included) that score inside
-# the answerable range. Calibrated on the golden set (n=20/10), so overfit risk is real
-# and recorded in DEVLOG rather than hidden.
 REJECT_THRESHOLD = 0.003

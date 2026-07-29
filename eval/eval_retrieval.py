@@ -74,13 +74,6 @@ def _mean(values) -> float:
 
 
 def separability(yes: list[float], no: list[float]) -> float:
-    """P(a yanitla row outscores a reddet row) — the Mann-Whitney statistic.
-
-    The raw score gap cannot be compared across models: e5 packs everything into
-    a narrow band (0.79-0.93) while other families spread wider, so the same gap
-    means different things. This is scale-free — 1.0 separates perfectly, 0.5 is
-    a coin flip — which is what the abstention threshold actually depends on.
-    """
     if not yes or not no:
         return 0.0
     wins = sum((y > n) + 0.5 * (y == n) for y in yes for n in no)
@@ -88,19 +81,10 @@ def separability(yes: list[float], no: list[float]) -> float:
 
 
 def _top1(hits: list) -> float:
-    """The retriever's own top-1 score. 0.0 when it returned nothing — BM25 does
-    that for a query whose terms appear in no chunk, and that is a real zero."""
     return float(hits[0].skor) if hits else 0.0
 
 
 def _top1_dense(hits: list) -> float | None:
-    """Cosine of whatever chunk came first, or None if this retriever has none.
-
-    Needed because the hybrid's own score is an RRF value: bounded by the fusion
-    constant, nearly flat and full of ties, so an AUC over it cannot be compared
-    with the dense run's. Under pure BM25 there is no cosine at all — None rather
-    than 0.0, so the column reports "not applicable" instead of a fabricated 0.500.
-    """
     if not hits:
         return None
     return None if hits[0].dense_skor is None else float(hits[0].dense_skor)
@@ -108,13 +92,6 @@ def _top1_dense(hits: list) -> float | None:
 
 def measure(variant: str = DEFAULT_VARIANT, model_name: str = EMBEDDING_MODEL,
             k: int = 5, retriever: str = RETRIEVER, search_fn=None) -> dict:
-    """Run the golden set through one retriever.
-
-    `search_fn` lets a sweep pass a configured variant (a partial of search_hybrid
-    with its own depth/weights/tokenizer) while `retriever` stays the label that
-    names it — the label travels with the measurement so a recorded run can never
-    be filed under settings it was not produced with.
-    """
     search_fn = search_fn or (lambda *a, **kw: search(*a, retriever=retriever, **kw))
     rows = yaml.safe_load(GOLDEN_SET.read_text(encoding="utf-8"))
     index = load_index(variant, model_name)
@@ -135,7 +112,7 @@ def measure(variant: str = DEFAULT_VARIANT, model_name: str = EMBEDDING_MODEL,
     no = [_top1(hits[r["id"]]) for r in rejectable]
     yes_dense = [_top1_dense(hits[r["id"]]) for r in answerable]
     no_dense = [_top1_dense(hits[r["id"]]) for r in rejectable]
-    # Only meaningful when every row actually has a cosine — otherwise the column
+    # Only meaningful when every row actually has a cosine, otherwise the column
     # is absent, not zero.
     has_dense = all(s is not None for s in yes_dense + no_dense)
 
@@ -231,7 +208,7 @@ def record(m: dict, extra: dict | None = None) -> Path:
             "precision": m["precision"],
             "mrr": m["mrr"],
             "auc": m["auc"],              # on the retriever's own top-1 score
-            "auc_dense": m["auc_dense"],  # on the top-1 hit's cosine — comparable across retrievers
+            "auc_dense": m["auc_dense"],  # on the top-1 hit's cosine, comparable across retrievers
             "overlap": m["overlap"],
         },
         "categories": {

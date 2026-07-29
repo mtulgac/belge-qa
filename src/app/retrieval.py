@@ -36,15 +36,15 @@ class Hit:
     yontem: str
     metin: str
     # Diagnostics. Which retriever produced this hit, and where it stood in each
-    # one — the hybrid's own score is an RRF value and says nothing about how
+    # one. The hybrid's own score is an RRF value and says nothing about how
     # strong the match was. None means that retriever did not rank the chunk.
     dense_skor: float | None = None
     bm25_skor: float | None = None
     dense_sira: int | None = None
     bm25_sira: int | None = None
     # Set only by the reranker: its own score (which becomes `skor`) and the rank
-    # this chunk held in the hybrid candidate list BEFORE reranking, so the
-    # cross-encoder's reordering is visible against what fusion handed it.
+    # this chunk held in the base retriever's candidate list BEFORE reranking, so
+    # the cross-encoder's reordering is visible against what it was handed.
     rerank_skor: float | None = None
     aday_sira: int | None = None
 
@@ -77,7 +77,6 @@ def load_bm25(
     model_name: str = EMBEDDING_MODEL,
     token: str = BM25_TOKEN,
 ) -> Bm25:
-    
     index = load_index(variant, model_name)
     return Bm25(
         [c["metin"] for c in index.chunks],
@@ -95,7 +94,7 @@ def _encoder(model_name: str):
 
 
 # Cached because a sweep asks the same 30 questions under every setting, and the
-# embedding does not depend on any of them — without this the fusion sweep pays
+# embedding does not depend on any of them, without this the fusion sweep pays
 # bge-m3's ~35 ms per query once per configuration instead of once. Callers treat
 # the vector as read-only.
 @lru_cache(maxsize=256)
@@ -165,7 +164,6 @@ def rrf(
     k_const: int = RRF_K,
     weights: tuple[float, ...] | None = None,
 ) -> dict[int, float]:
-    
     weights = weights or (1.0,) * len(rankings)
     fused: dict[int, float] = {}
     for weight, ranking in zip(weights, rankings):
@@ -213,8 +211,8 @@ def search_hybrid(
 
 # The retrievers a reranker can draw candidates from. Both take (question, k,
 # variant, model_name, exclude) positionally, so search_rerank calls either the
-# same way. "hibrit" is the default; "dense" is the ablation that asks whether the
-# reranker still needs BM25 in front of it.
+# same way. "dense" is the frozen base (RERANK_BASE); "hibrit" remains selectable as
+# the ablation that asked whether the reranker still needs BM25 in front of it.
 BASE_RETRIEVERS = {"hibrit": search_hybrid, "dense": search_dense}
 
 
@@ -227,8 +225,9 @@ def search_rerank(
     depth: int = RERANK_DEPTH,
     rerank_model: str = RERANK_MODEL,
     base: str = RERANK_BASE,
+    on_stage=None,
 ) -> list[Hit]:
-    
+
     from app.models import rerank_scores
 
     if base not in BASE_RETRIEVERS:
@@ -236,6 +235,8 @@ def search_rerank(
     candidates = BASE_RETRIEVERS[base](question, depth, variant, model_name, exclude)
     if not candidates:
         return []
+    if on_stage:
+        on_stage("rerank")   # UI hook: base retrieval done, cross-encoder starting
     scores = rerank_scores(question, [h.metin for h in candidates], rerank_model)
     order = np.argsort(-scores)[:k]
     return [
@@ -243,7 +244,7 @@ def search_rerank(
             candidates[i],
             skor=float(scores[i]),
             rerank_skor=float(scores[i]),
-            aday_sira=i + 1,  # candidates are already in fused rank order
+            aday_sira=i + 1,  # candidates are already in base rank order
         )
         for i in order
     ]
@@ -264,8 +265,10 @@ def search(
     model_name: str = EMBEDDING_MODEL,
     exclude: tuple[str, ...] = (),
     retriever: str = RETRIEVER,
+    on_stage=None,
 ) -> list[Hit]:
-    
     if retriever not in RETRIEVERS:
         raise ValueError(f"unknown retriever: {retriever} (options: {list(RETRIEVERS)})")
+    if retriever == "rerank":   # the only retriever with an internal stage to report
+        return search_rerank(question, k, variant, model_name, exclude, on_stage=on_stage)
     return RETRIEVERS[retriever](question, k, variant, model_name, exclude)

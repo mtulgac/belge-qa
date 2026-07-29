@@ -10,25 +10,10 @@ from app.config import LLM_MODEL, LLM_NUM_CTX, LLM_TEMPERATURE, resolve_num_pred
 # than fuzzy phrase matching across two languages.
 REFUSAL = "[YANITLANAMADI]"
 
-# Reasoning models (were excluded as candidates, but a future one might slip in) wrap
-# their scratchpad in <think>...</think>. Strip it before parsing so the sentinel and
-# citations are read off the final answer only, never the reasoning trace.
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 
-# Citations are passage numbers: [1], [3], or a run like [1][2]. The model only has to
-# echo the number of the passage it used; generate() maps that back to the real
-# (dosya, sayfa) from the hit list. This is far more robust than asking the model to
-# copy file names — a small model writes "[dosya s.4]" literally ("dosya" is also a
-# Turkish word) and the source is lost. The number can't be faked into a wrong file.
 _CITATION_RE = re.compile(r"\[(\d+)\]")
 
-# Name patterns that mark a reasoning model, so `think=False` is passed to suppress the
-# trace (a latency win). Independent of _THINK_RE, which is the safety net if it leaks.
-# gemma4:e4b (the large tier) is a thinking model too but is DELIBERATELY not listed:
-# measured, its hidden reasoning drops hallucinations on the reddet rows 4/10 -> 1/10, and
-# faithfulness is the graded priority, so large keeps thinking on (it gets the wider
-# num_predict in config to fit reasoning + answer). turbo (qwen3.5:4b) matches here because
-# its reasoning is 4600-6000+ tokens/query — disqualifying on latency for the fast tier.
 _REASONING_RE = re.compile(r"(qwen3|deepseek-?r1|[-:/]r1\b|reason)", re.IGNORECASE)
 
 SYSTEM_PROMPT = """You are a document question-answering assistant. Answer using ONLY \
@@ -62,8 +47,6 @@ def _page_label(hit) -> str:
 
 
 def format_context(hits) -> str:
-    """The passages block: each hit numbered, with a `dosya s.N` header the model
-    copies into its citations."""
     blocks = []
     for i, h in enumerate(hits, start=1):
         blocks.append(f"[{i}] {h.dosya} {_page_label(h)}\n{h.metin}")
@@ -84,11 +67,6 @@ def _strip_thinking(text: str) -> str:
 
 
 def _extract_citations(text: str, hits) -> list[dict]:
-    """Map the passage numbers the answer cites ([1], [3], ...) back to real sources.
-
-    Deduped, order preserved. Out-of-range numbers (the model invented a passage) are
-    dropped — a citation can only point at a passage that was actually shown, which is
-    the guarantee the number scheme buys over free-form file names."""
     seen, out = set(), []
     for m in _CITATION_RE.finditer(text):
         i = int(m.group(1))
@@ -102,19 +80,46 @@ def _extract_citations(text: str, hits) -> list[dict]:
     return out
 
 
-def generate(question: str, hits, model: str = LLM_MODEL) -> GenResult:
-    """Run one grounded generation. `hits` are the reranked chunks (retrieval.Hit)."""
+def _consume_stream(chunks, on_stage, on_token) -> str:
+    parts: list[str] = []
+    thinking_seen = content_seen = False
+    for chunk in chunks:
+        msg = chunk["message"]
+        if not thinking_seen and (msg.get("thinking") or "") and on_stage:
+            on_stage("thinking")
+            thinking_seen = True
+        delta = msg.get("content") or ""
+        if delta:
+            if not content_seen and on_stage:
+                on_stage("writing")
+                content_seen = True
+            parts.append(delta)
+            if on_token:
+                on_token(delta)
+    return "".join(parts)
+
+
+def generate(
+    question: str,
+    hits,
+    model: str = LLM_MODEL,
+    on_stage=None,
+    on_token=None,
+) -> GenResult:
     if not hits:
         # Nothing to ground on. The pipeline's stage-1 gate normally catches this
         # first; guard here too so generate() is safe to call directly.
         return GenResult(raw="", grounded=False, cevap="Belge bulunamadı.")
 
+    stream = on_stage is not None or on_token is not None
     kwargs = dict(
         model=model,
         messages=build_messages(question, hits),
         options={"temperature": LLM_TEMPERATURE, "num_ctx": LLM_NUM_CTX,
                  "num_predict": resolve_num_predict(model)},
     )
+    if stream:
+        kwargs["stream"] = True
     if _REASONING_RE.search(model):
         kwargs["think"] = False
     try:
@@ -124,16 +129,10 @@ def generate(question: str, hits, model: str = LLM_MODEL) -> GenResult:
         kwargs.pop("think", None)
         resp = ollama.chat(**kwargs)
 
-    raw = resp["message"]["content"]
+    raw = _consume_stream(resp, on_stage, on_token) if stream else resp["message"]["content"]
     text = _strip_thinking(raw)
 
     if not text:
-        # No answer text came back. A thinking model can spend its whole num_predict
-        # budget on hidden reasoning (message.thinking) before the answer starts, or a
-        # length cap can cut it off first — either way message.content is empty. Report
-        # it as ungrounded so the pipeline abstains with a reason instead of surfacing a
-        # blank answer. (Per-model num_predict is sized to make this rare; this is the
-        # backstop for the tail.)
         return GenResult(raw=raw, grounded=False, cevap="cevap üretilemedi")
 
     if REFUSAL in text:

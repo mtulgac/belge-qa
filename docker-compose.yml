@@ -1,0 +1,43 @@
+# Two services: the Ollama LLM server and the QA app. Models live in named volumes
+# (not baked into images) and are filled on the first online `up`; after that the
+# volumes persist and the stack runs offline. See DEVLOG for why.
+services:
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama_models:/root/.ollama   # pulled LLMs persist here
+    ports:
+      - "11434:11434"                 # exposed for host debugging; app uses the service name
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 12                     # ~2 min grace for a cold start
+
+  app:
+    build: .
+    depends_on:
+      ollama:
+        condition: service_healthy    # entrypoint still waits, but this orders startup
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      HF_HOME: /models
+      PROVISION: "${PROVISION:-1}"    # first up pulls turbo+large (idempotent); PROVISION=0 to skip
+      # HF_HUB_OFFLINE: "1"           # uncomment after first run for a fully offline stack
+    volumes:
+      - hf_cache:/models              # bge-m3 + reranker download here on first inference
+      - uploads:/app/data/uploads     # user-uploaded documents (web UI)
+      - runtime_index:/app/data/index/runtime  # their incremental index, both survive restarts
+    ports:
+      - "8501:8501"                   # Streamlit web UI
+    # Web UI on http://localhost:8501. The CLI still works alongside it:
+    #   docker compose exec app python -m app.cli "azami süre kaç dönem?"
+    command: ["streamlit", "run", "src/app/webui.py",
+              "--server.address", "0.0.0.0", "--server.port", "8501",
+              "--server.headless", "true"]
+
+volumes:
+  ollama_models:
+  hf_cache:
+  uploads:
+  runtime_index:

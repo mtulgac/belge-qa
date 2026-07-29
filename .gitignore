@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 .DS_Store
 data/index/
+data/uploads/
 out/
 .cache/
 *.npz

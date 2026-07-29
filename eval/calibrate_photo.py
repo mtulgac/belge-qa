@@ -14,16 +14,10 @@ from app.ocr import (
     ocr_confidence,
     page_image,
 )
-from evaluate import cer
+from eval_ocr import cer
 
-# Reference: the digital text layer of the regulation (page 1) — the same ground
-# truth design as the bake-off, no hand transcription. Inputs that are not that
-# page get no CER column; scoring them against it would print a number that
-# looks like a verdict and is not one.
 REFERENCE = ("tobb_yonetmelik.pdf", 0)
 
-# Below this gap the two methods are tied — the corpus has pairs that differ by
-# 0.04 points, which is reference noise, not a win for either side.
 TIE_POINTS = 1.0
 
 

@@ -10,12 +10,7 @@ OCR_LANG = "tur+eng"
 OCR_CONFIG = "--psm 3"
 RENDER_DPI = 300
 
-# Preprocessing gate, calibrated by calibrate_photo.py. Measured spread: photo
-# 72.0 and a synthetically shadowed page 135.0, against 0.0 for scanned pages,
-# the screenshot and digital renders. The threshold sits high in that gap, not
-# in the middle: a false positive preprocesses clean input and takes CER from
-# 3.27% to 33.75%, while a false negative merely leaves a photo on raw OCR
-# (21.50%). The costs are asymmetric, so the gate is conservative.
+# Preprocessing gate, calibrated by calibrate_photo.py.
 PHOTO_SPREAD_THRESHOLD = 25.0
 
 # EasyOCR languages: Turkish and English are both Latin-script, so the combo is
@@ -31,7 +26,6 @@ _rapidocr_engine = None
 
 
 def page_image(page: fitz.Page, dpi: int = RENDER_DPI) -> np.ndarray:
-
     pix = page.get_pixmap(dpi=dpi)
     img = np.frombuffer(pix.samples, dtype=np.uint8)
     img = img.reshape(pix.height, pix.width, pix.n)
@@ -53,7 +47,7 @@ def _background(gray: np.ndarray) -> np.ndarray:
 
 def illumination_spread(img: np.ndarray) -> float:
     """Spread of background brightness (0-255). High on a photo because of
-    shadow and angled light, ~0 on a scan or screenshot — those are flat white."""
+    shadow and angled light, ~0 on a scan or screenshot, those are flat white."""
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
     bg = _background(cv2.medianBlur(gray, 3))
     p5, p95 = np.percentile(bg, [5, 95])
@@ -66,7 +60,6 @@ def is_photo(img: np.ndarray) -> bool:
 
 
 def preprocess(img: np.ndarray) -> np.ndarray:
-
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
     gray = cv2.medianBlur(gray, 3)
 
@@ -79,7 +72,7 @@ def preprocess(img: np.ndarray) -> np.ndarray:
     ys, xs = np.where(binary > 0)
     if len(xs) > 100:
         # minAreaRect expects (x, y) points; np.where yields (row, col) = (y, x).
-        # Feeding (y, x) fits the rect to a mirrored page — the angle comes out
+        # Feeding (y, x) fits the rect to a mirrored page, the angle comes out
         # wrong and the "correction" used to rotate pages 90°.
         pts = np.column_stack([xs, ys]).astype(np.float32)
         angle = cv2.minAreaRect(pts)[-1]
@@ -105,14 +98,12 @@ def preprocess(img: np.ndarray) -> np.ndarray:
 # --- Methods -----------------------------------------------------------------
 
 def method_text_layer(page: fitz.Page) -> tuple[str, float]:
-
     t0 = time.perf_counter()
     text = page.get_text("text").strip()
     return text, time.perf_counter() - t0
 
 
 def method_ocr_raw(page_or_img) -> tuple[str, float]:
-
     t0 = time.perf_counter()
     img = (
         page_image(page_or_img)
@@ -124,7 +115,6 @@ def method_ocr_raw(page_or_img) -> tuple[str, float]:
 
 
 def method_ocr_preprocessed(page_or_img) -> tuple[str, float]:
-
     t0 = time.perf_counter()
     img = (
         page_image(page_or_img)
@@ -138,7 +128,6 @@ def method_ocr_preprocessed(page_or_img) -> tuple[str, float]:
 
 
 def _get_easyocr_reader():
-
     global _easyocr_reader
     if _easyocr_reader is None:
         import easyocr
@@ -147,7 +136,6 @@ def _get_easyocr_reader():
 
 
 def method_easyocr(page_or_img) -> tuple[str, float]:
-
     t0 = time.perf_counter()
     img = (
         page_image(page_or_img)
@@ -160,7 +148,6 @@ def method_easyocr(page_or_img) -> tuple[str, float]:
 
 
 def _get_rapidocr_engine():
-
     global _rapidocr_engine
     if _rapidocr_engine is None:
         import logging
@@ -177,7 +164,6 @@ def _get_rapidocr_engine():
 
 
 def method_rapidocr(page_or_img) -> tuple[str, float]:
-
     t0 = time.perf_counter()
     img = (
         page_image(page_or_img)
@@ -190,7 +176,6 @@ def method_rapidocr(page_or_img) -> tuple[str, float]:
 
 
 def ocr_confidence(page_or_img, do_preprocess: bool = False) -> float:
-
     img = (
         page_image(page_or_img)
         if isinstance(page_or_img, fitz.Page)

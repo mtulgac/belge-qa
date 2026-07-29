@@ -6,7 +6,7 @@ from pathlib import Path
 import fitz
 from rapidfuzz.distance import Levenshtein
 
-from app.config import DOC_LANG
+from app.config import DOC_LANG, ROOT, SAMPLES
 from app.ocr import (
     method_easyocr,
     method_ocr_preprocessed,
@@ -15,13 +15,12 @@ from app.ocr import (
     method_text_layer,
 )
 
-SAMPLES = Path("data/samples")
-PARSED = Path("out/parsed")
+PARSED = ROOT / "out" / "parsed"
 SUMMARY_CSV = PARSED / "_summary.csv"
 
 # Manual ground truth: hand-typed transcription plus the page range it covers.
 MANUAL_GT = {
-    "resmi_gazete_1995": (Path("data/resmi_gazete_p1_ground_truth.txt"), (0, 1)),
+    "resmi_gazete_1995": (ROOT / "data" / "resmi_gazete_p1_ground_truth.txt", (0, 1)),
 }
 
 # OCR methods that compete in the bake-off. text_layer is the reference path
@@ -191,7 +190,7 @@ def _print_ranking(by_method, time_by_method) -> None:
         return f"{x * 100:7.2f}%" if pct else f"{x:9.1f}"
 
     # Worst-case CER across languages: a method must be acceptable in BOTH.
-    # This is the same anti-masking logic as the TR/EN split — a strong score in
+    # This is the same anti-masking logic as the TR/EN split, a strong score in
     # one language must not hide a collapse in the other.
     def worst(r):
         vals = [v for v in (r[1], r[2]) if v is not None]

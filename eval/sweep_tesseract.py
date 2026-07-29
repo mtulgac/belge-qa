@@ -7,13 +7,13 @@ import cv2
 import fitz
 import pytesseract
 
-from evaluate import LANG, MANUAL_GT, cer, reference_text
+from eval_ocr import LANG, MANUAL_GT, cer, reference_text
+from app.config import ROOT, SAMPLES
 from app.ocr import page_image
 
-SAMPLES = Path("data/samples")
-OUT = Path("out/sweep")
+OUT = ROOT / "out" / "sweep"
 RESULTS_CSV = OUT / "results.csv"
-BEST_DIR = "data/tessdata/best"
+BEST_DIR = str(ROOT / "data" / "tessdata" / "best")
 
 GRID = [
     ("fast_psm3_300", None, 3, 300),

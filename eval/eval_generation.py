@@ -60,7 +60,7 @@ def _numbers(t: str) -> set[str]:
 
 
 def answer_covers(text: str, quote: str) -> bool:
-    
+
     qnums = _numbers(quote)
     if qnums:
         return qnums.issubset(_numbers(text))
@@ -161,9 +161,6 @@ def summarize(m: dict) -> dict:
 
 
 def record(m: dict, s: dict) -> Path:
-    # Depth is in the filename so a depth-20 re-run does not overwrite the depth-10
-    # results — the two are a comparison, not a replacement. RERANK_DEPTH is a config
-    # constant, so it names the run the eval was actually produced under.
     path = RESULTS_DIR / f"{model_slug(m['model'])}_d{RERANK_DEPTH}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {

@@ -6,6 +6,7 @@ from pathlib import Path
 import cv2
 import fitz
 
+from app.config import ROOT, SAMPLES
 from app.needs_ocr import needs_ocr
 from app.ocr import (
     method_easyocr,
@@ -15,8 +16,7 @@ from app.ocr import (
     method_text_layer,
 )
 
-SAMPLES = Path("data/samples")
-OUT = Path("out/parsed")
+OUT = ROOT / "out" / "parsed"
 SUMMARY_CSV = OUT / "_summary.csv"
 TR_CHARS = set("çğıöşüÇĞİÖŞÜ")
 
@@ -63,7 +63,7 @@ def process_pdf(path: Path) -> list[dict]:
             "pages": len(doc),
         })
 
-    # The router's decision — informational, does not gate extraction
+    # The router's decision: informational, does not gate extraction
     decisions = [needs_ocr(p)[1] for p in doc]
     doc.close()
     for r in results:

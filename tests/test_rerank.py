@@ -7,7 +7,7 @@ import numpy as np
 
 _ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_ROOT / "src"))   # the app package
-sys.path.insert(0, str(_ROOT))           # eval_retrieval / sweep_rerank at repo root
+sys.path.insert(0, str(_ROOT / "eval"))  # eval_retrieval / sweep_rerank under eval/
 
 import app.models as M
 import app.retrieval as R
@@ -66,7 +66,7 @@ def test_preserves_provenance_and_ablation_shape():
                               depth=20, base="dense")
         for h in hyb:
             assert h.aday_sira is not None and 1 <= h.aday_sira <= 20
-        # Dense candidates carry no BM25 provenance — the ablation source is visible.
+        # Dense candidates carry no BM25 provenance, the ablation source is visible.
         assert all(h.bm25_skor is None for h in dns)
         assert all(h.dense_skor is not None for h in dns)
 
@@ -83,7 +83,7 @@ def test_measure_record_roundtrip(tmp_path=None):
         try:
             assert path.name == "rerank_k5.json", path.name
         finally:
-            # This run used a FAKE embedder — must never leave a bogus canonical file.
+            # This run used a FAKE embedder, must never leave a bogus canonical file.
             path.unlink()
 
 

@@ -77,7 +77,12 @@ hangi sinyale bağlanacağı ölçüldü; "doğru metod" sütunu CER metriğine 
   çalışan sistemde belge gizleyen bir filtre yok.
 - **İndeks:** 311 chunk, hedef 800 / örtüşme 150 karakter, `CHUNK_MAX` 1600. En uzun chunk
   411 token. 1600 sınırı e5-small'ın 512 token'lık penceresi için kondu; donan model bge-m3'ün
-  penceresi 8192 olduğu için bu gerekçe artık geçerli değil (bkz. DEVLOG Gün 3).
+  penceresi 8192 olduğu için o gerekçe düştü, ama hedef/örtüşme ekseni Gün 6'da tarandı ve
+  800/150 ölçümle yerinde bırakıldı (bkz. *Chunk parametre taraması*).
+- **Süre ölçümlerinin cihazı (Gün 6 düzeltmesi):** embedding süreleri (ms/sorgu, s/chunk ve
+  dense/hibrit gecikme tablosu) **MPS'te** ölçüldü. sentence-transformers Apple Silicon'da
+  cihazı otomatik seçiyor ve embedder'da device sabitlenmedi. Cross-encoder tablolarındaki
+  süreler ise `device=cpu` sabitli, **gerçek CPU**. recall/precision/MRR/AUC cihazdan bağımsız.
 
 ### Embedding modeli karşılaştırması (Gün 3)
 
@@ -235,6 +240,26 @@ Tek eşik maliyeti (reranker skoru, [0,1]):
 | mmarco | 4 / 0 | 0.999 → 14/20 yanıtlanabilir |
 
 
+### Chunk parametre taraması (Gün 6)
+
+Retrieval'ın taranmamış son ekseni. Tarama dense retrieval üzerinden çünkü 
+chunking'in etkisi aday havuzunda görünür, reranker o havuzu yalnız yeniden sıralar.
+
+| hedef / örtüşme | chunk | recall@5 | TR | EN | çapraz dil | MRR | AUC |
+|---|---|---|---|---|---|---|---|
+| 600 / 100 | 419 | %92.5 | %90.6 | %100 | %100 | 0.69 | 0.785 |
+| 600 / 150 | 444 | %92.5 | %90.6 | %100 | %100 | 0.71 | 0.775 |
+| 600 / 200 | 475 | %92.5 | %90.6 | %100 | %100 | 0.72 | 0.795 |
+| 800 / 100 | 301 | %90.0 | %87.5 | %100 | %100 | 0.69 | 0.785 |
+| **800 / 150 (mevcut)** | **311** | **%90.0** | **%93.8** | %75.0 | %100 | 0.68 | 0.790 |
+| 800 / 200 | 331 | %80.0 | %81.2 | %75.0 | %66.7 | 0.68 | 0.770 |
+| 1000 / 100 | 238 | %87.5 | %90.6 | %75.0 | %100 | 0.70 | 0.765 |
+| 1000 / 150 | 246 | %82.5 | %90.6 | %50.0 | %100 | 0.70 | 0.785 |
+| 1000 / 200 | 261 | %90.0 | %93.8 | %75.0 | %100 | 0.69 | 0.750 |
+| 1200 / 100 | 194 | %87.5 | %84.4 | %100 | %100 | 0.66 | 0.755 |
+| 1200 / 150 | 199 | %90.0 | %87.5 | %100 | %100 | 0.72 | 0.730 |
+| 1200 / 200 | 210 | %92.5 | %90.6 | %100 | %100 | 0.69 | 0.775 |
+
 
 ## 3. Generation ve reddetme eşiği (Gün 5)
 
@@ -249,6 +274,9 @@ Tek eşik maliyeti (reranker skoru, [0,1]):
   doğruluğu**, deterministik anahtar-eşleşme (sayı-norm + `token_set_ratio`, çapa alıntısına
   karşı) ve opsiyonel **LLM yargıç** (gemma4:12b, offline). TR/EN **ayrı**.
 - **Öncelik:** sıfıra yakın uydurma.
+- **Gecikme sütunları local ölçümdür (Gün 6 düzeltmesi):** local Ollama bu Mac'te Metal
+  GPU kullanıyor; bu bölümdeki LLM süreleri GPU'lu sayılar. GPU'suz on-prem CPU maliyeti
+  4. bölümde (~4×).
 
 ### Reddetme sinyali: reranker top-1 vs mean(top-5) (bge-m3, dense, depth 10)
 
@@ -280,7 +308,7 @@ Uydurma her iki modelde de **yalnız q022** (arXiv, yanıtlanamaz), LLM groundin
 | model | eleme sebebi | sayı |
 |---|---|---|
 | qwen3.5:9b | uydurma (öncelik ekseni) | 3/10 (q022, q033, q034); cevap 15/20, gecikme medyan 20.2 s |
-| gemma4:12b | gecikme (CPU) | ~65 s/soru medyan (koşu 9/30'da durduruldu); offline yargıç oldu |
+| gemma4:12b | gecikme | ~65 s/soru medyan, Metal GPU'da bile (koşu 9/30'da durduruldu); offline yargıç oldu |
 
 ### Depth 10 vs 20 (generation)
 
@@ -313,6 +341,28 @@ korundu.
 
 ---
 
+## 4. Web UI ve dağıtım (Gün 6)
+
+### Metodoloji
+
+- **Modelden bağımsız unit testler**: runtime indeksin oluşturulması, 
+  ikinci belgeyle büyümesi, aynı isimli dosyanın değiştirilmesi, 
+  cache tazeleme sonrası aramanın yeni belgeyi görmesi, boş belgenin
+  reddedilmesi, upload dosya adının temizlenmesi, indeks temizlemenin (clear_index)
+  indeksi + upload'ları silip retrieval cache'ini düşürmesi. `tests/` toplamı **9/9**
+  geçiyor.
+- **Regresyon:** `eval/` taşıması + hook eklemeleri sonrası `eval_retrieval.py` dense ve
+  rerank sonuçları öncekilerin birebir aynısı geldi (dense r@5 %90.0 / AUC 0.790, rerank %95.0).
+  
+### LLM Gecikmesi: local (Metal GPU) vs Docker (CPU)
+
+| ortam | LLM'in gördüğü donanım | turbo (soru başına) | large (soru başına) |
+|---|---|---|---|
+| local (M2) | 10 çekirdekli GPU, Metal | ~14 s | ~37 s |
+| Docker VM (8 CPU) | yalnız CPU | ~60-75 s | ~150 s |
+
+---
+
 ## Sınırlar
 
 Parsing / OCR:
@@ -329,9 +379,9 @@ Retrieval:
   gerekiyor, tek eşleşme yetmiyor.
 - **OCR maliyeti sonucu temiz taramayla sınırlı:** varyant grubundaki tarama %0.13 CER.
   Daha kötü OCR'da retrieval'ın nerede kırıldığı ölçülmedi.
-- **Chunk parametreleri taranmadı:** 800/150 makul başlangıç değerleri, ölçümle
-  seçilmediler. `CHUNK_MAX=1600` ölçümle kondu ama e5-small'ın penceresine göre; bge-m3'te
-  o kısıt yok, dolayısıyla bugünkü değerin ölçülmüş bir gerekçesi de yok.
+- **Chunk taramasının sonucu "fark yok" ama örneklem yine 20:** 12 kombinasyondaki
+  %80-92.5 salınımı tek çapanın sınır şansı; tarama bir kazanan seçmedi, mevcut değeri
+  değiştirecek sinyal olmadığını gösterdi. Küçük chunk'ın q009 kazancı reranker'la mükerrer.
 - Tablo soruları doğru chunk'ı bulma seviyesinde %100; düzleşmiş tablodan doğru hücrenin
   okunması generation aşamasında ayrıca test edilecek.
 - **Reddetme eşiği tek başına çözmüyor** (5. günde iki aşamalı kapıya bağlandı). Kosinüs
@@ -358,3 +408,16 @@ Generation / reddetme:
 - **Doğruluk metriği:** deterministik anahtar-eşleşme bir alt sınır (sayı doğru/bağlam yanlış
   vakalarında false-positive, çapraz dilde eski sürümde false-negative, düzeltildi). LLM
   yargıç zengin ama yargıç modelin kendi hatasını taşır; ikisi birlikte raporlanıyor.
+
+Web UI / dağıtım:
+- **Golden set arayüz akışını kapsamıyor:** upload → indeksleme → soru zinciri elle test
+  edildi; otomatik kısmı unit testler ile sınırlı.
+- **Tek kullanıcı varsayımı:** arayüz demo amaçlı; eşzamanlı kullanıcı/istek altında model
+  tekilleri (embedder, reranker) test edilmedi.
+- **Çoklu-tur yok:** sohbet geçmiş yalnızca görsel için; her soru bağımsız cevaplanıyor (
+  golden set tek-tur olduğu için ölçülemezdi, bilinçli sınır).
+- **Ollama boşta modeli bırakıyor (~5 dk):** tier değişimi ya da uzun aradan sonra ilk soru
+  model yükleme süresi bekler (iki modelin birden
+  bellekte kalmasının RAM maliyeti var).
+- **Docker'da LLM ~4× yavaş** (GPU VM'e geçmiyor; tablo #4). Dağıtım notu: GPU'suz on-prem
+  hedefte gerçekçi süreler Docker sütunudur, local süreler Metal GPU'ludur.

@@ -1,7 +1,6 @@
-from pathlib import Path
-
 import fitz
 
+from app.config import SAMPLES
 from app.needs_ocr import (
     BENIGN_INVISIBLE,
     MOJIBAKE_TR,
@@ -9,13 +8,11 @@ from app.needs_ocr import (
     needs_ocr,
 )
 
-SAMPLES = Path("data/samples")
-
 
 def ratios():
 
     print("=" * 78)
-    print("CALIBRATION — set thresholds by looking at these values (per page)")
+    print("CALIBRATION: set thresholds by looking at these values (per page)")
     print("=" * 78)
     print(
         f"{'doc':26} {'page':>4} {'chars':>6} {'mojibake':>9} "
@@ -49,7 +46,7 @@ def ratios():
 
     print()
     print("unprint: put UNPRINTABLE_MAX between the sound pages and the corrupt ones.")
-    print("benign: invisible formatting chars — excluded from unprint on purpose.")
+    print("benign: invisible formatting chars, excluded from unprint on purpose.")
     print()
 
 

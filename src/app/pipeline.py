@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 
-from app.config import GEN_K, LLM_MODEL, REJECT_THRESHOLD, RETRIEVER
+from app.config import DEFAULT_VARIANT, GEN_K, LLM_MODEL, REJECT_THRESHOLD, RETRIEVER
 from app.generation import generate
 from app.retrieval import Hit, search
 
@@ -22,17 +22,16 @@ def answer(
     model: str = LLM_MODEL,
     k: int = GEN_K,
     retriever: str = RETRIEVER,
+    variant: str = DEFAULT_VARIANT,
+    on_stage=None,
+    on_token=None,
 ) -> Answer:
-    """Answer one question against the index, or abstain.
-
-    `session_id` / `history` are accepted so the signature is stable for the web UI,
-    but multi-turn is not wired: the golden set is single-turn, so follow-up rewriting
-    and conversation state are deferred to the web-UI day. Both are ignored here.
-    """
-    hits = search(question, k=k, retriever=retriever)
+    if on_stage:
+        on_stage("retrieval")
+    hits = search(question, k=k, retriever=retriever, variant=variant, on_stage=on_stage)
 
     # Stage 1: cheap reranker-score pre-filter. Empty hits or a top score below the
-    # zero-false-reject threshold means an off-topic question — reject without paying
+    # zero-false-reject threshold means an off-topic question: reject without paying
     # for the LLM call.
     if not hits or hits[0].skor < REJECT_THRESHOLD:
         return Answer(
@@ -42,8 +41,10 @@ def answer(
             hits=hits,
         )
 
-    # Stage 2: LLM grounding/citation backstop — the authoritative gate.
-    result = generate(question, hits, model=model)
+    # Stage 2: LLM grounding/citation backstop, the authoritative gate.
+    if on_stage:
+        on_stage("generate")
+    result = generate(question, hits, model=model, on_stage=on_stage, on_token=on_token)
     if not result.grounded:
         return Answer(
             cevap="",
