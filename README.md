@@ -2,7 +2,67 @@
 
 Bu repo, Case çalışması kapsamında kullanıcının PDF/JPG/PNG formatında belgeler yükleyip doğal dilde soru sorabildiği, cevapları **yalnız belgelere dayalı** ve **Türkçe + İngilizce** çalışan bir doküman bilgi erişim sistemini içermektedir. 
 
-Tasarım kararları ve ölçümler: [`DEVLOG.md`](DEVLOG.md) ve [`TESTING.md`](TESTING.md).
+Sistemin akışı: sayfa bazlı parsing/OCR (Tesseract) → chunking → çok dilli embedding
+(bge-m3) → dense retrieval → cross-encoder reranking (bge-reranker-v2-m3) → iki aşamalı
+reddetme kapısı → Ollama üzerinde yerel LLM ile kaynak göstererek cevap üretimi. Kullanıcı
+iki model arasında seçim yapabilir: `turbo` (qwen3.5:4b, hızlı) ve `large` (gemma4:e4b,
+reasoning). Cevabı belgelerde bulunmayan soru **YANITLANAMADI** olarak reddedilir; üretilen
+her cevap kaynak belge + sayfa ile döner.
+
+Tasarım kararları ve gerekçeleri [`DEVLOG.md`](DEVLOG.md)'de, tüm test metodolojisi ve
+sonuçları [`TESTING.md`](TESTING.md)'de.
+
+## Demo
+
+- **Video:** [`demo/demo.mp4`](demo/demo.mp4) (~5,5 dk; belge yükleme → indeksleme →
+  soru-cevap → kaynak gösterimi → reddetme)
+- **Sunum:** [`demo/case_sunum.pdf`](demo/case_sunum.pdf)
+- **Mimari diyagram:** [`demo/mimari_diyagrami.jpeg`](demo/mimari_diyagrami.jpeg)
+
+## Ölçülen performans (golden set: 30 soru, TR 23 / EN 7)
+
+Bütün metrikler TR ve EN için ayrı raporlanır, ortalama alınmaz (ayrıntılar TESTING.md):
+
+| Aşama | Metrik | Sonuç |
+|---|---|---|
+| Parsing / OCR | CER (Tesseract, worst-case belge tipi) | TR %10.6 / EN %14.1; temiz taramada %0.13 |
+| Retrieval (dense → reranker, k=5) | recall@5 | **%95.0** (TR %93.8 / EN %100), MRR 0.82 |
+| Reddetme (iki aşamalı kapı) | uydurma | **1/10** (her iki model) |
+| | gereksiz red | large 0/20, turbo 1/20 |
+| Cevap doğruluğu (LLM yargıç) | doğru cevap | 16/20 (her iki model; TR 12/16, EN 4/4) |
+| Gecikme (soru başına) | local, Metal GPU | turbo ~14 s / large ~37 s |
+| | Docker, yalnız CPU | turbo ~60-75 s / large ~150 s |
+
+## Proje yapısı
+
+```
+src/app/         Sistem kodu (editable paket): parsing/OCR, ingest, retrieval + reranker,
+                 iki aşamalı reddetme kapısı, generation, CLI ve Streamlit arayüzü;
+                 hepsi tek kapı olan pipeline.answer üzerinden çalışır
+eval/            Ölçüm scriptleri: her biri bir kararın kanıtı (OCR bake-off, model
+                 taramaları, retrieval/generation değerlendirmeleri); pakete dahil değil
+tests/           Modelden bağımsız unit testler (pytest, 9 test)
+data/samples/    Ölçüm korpusu: 10 belge (TR/EN, dijital/taranmış/fotoğraf; aynı içeriğin
+                 kontrollü format varyantları dahil)
+data/golden_qa_sablon.yaml   Golden set: 30 soru + cevap çapaları (dosya + sayfa + alıntı)
+docker/          Compose entrypoint (Ollama bekleme + model provizyonu)
+demo/            Demo videosu, sunum, mimari diyagram
+```
+
+## Bilinen sınırlar
+
+- **Çoklu-tur diyalog yok:** arayüzdeki geçmiş yalnız görsel, her soru bağımsız cevaplanır
+  (golden set tek-tur olduğu için ölçülemezdi, bilinçli sınır).
+- **Prompt injection savunması yok:** yüklenen belge içindeki talimat benzeri metinlere
+  karşı ayrı bir güvenlik katmanı bulunmuyor.
+- **Örneklem küçük:** golden set 30 soru (20 yanıtlanabilir / 10 reddet; EN yalnız 7).
+  Raporlanan sayılar tek soruya duyarlı; kararlar bu yüzden öncelik ekseni (uydurma) ve
+  iki dilin worst-case'i üzerinden verildi.
+- **Çelişki kategorisi en zayıf halka:** iki belgeden iki değeri birden getirip kaynağıyla
+  ayrıştırmak gerekiyor (retrieval %50, cevap large 0/2 / turbo 1/2).
+
+Sınırların tam listesi ve ölçülmüş ayrıntıları [`TESTING.md`](TESTING.md)'nin *Sınırlar*
+bölümünde.
 
 ---
 
@@ -18,7 +78,7 @@ named volume'lara inip orada kalır, sonrası offline çalışır.
 - **Docker VM belleği ≥ 12 GB** `large` model (gemma4:e4b) belleğe 8.5 GB ağırlık yüklüyor;
   8 GB VM'de OOM oluyor. Yalnız `turbo` kullanıldığında 8 GB yeter. 
   
-### İilk sefer image build + model indirme
+### İlk sefer image build + model indirme
 
 ```bash
 git clone <repo-url>
@@ -91,7 +151,7 @@ Uygulama LLM'e `http://localhost:11434`'te çalışan Ollama üzerinden bağlan�
 açık ve iki modelin de çekili olması gerekir:
 
 ```bash
-ollama serve                     # sunucuyu başlat (macOS uygulaması kuruluysa zaten çalışır;
+ollama serve                     # sunucuyu başlat (macOS uygulaması kuruluysa zaten çalışır)
 
 ollama pull qwen3.5:4b           # turbo, varsayılan model (~3.4 GB)
 ollama pull gemma4:e4b           # large, reasoning model (~9.6 GB)

@@ -9,3 +9,4 @@ out/
 # User state (web UI uploads + their index) comes from named volumes, never the image.
 data/uploads/
 data/index/runtime/
+personal/

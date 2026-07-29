@@ -815,3 +815,42 @@ Bulgular:
 - Ollama ~5 dk boşta kalan modeli bellekten atıyor; tier değişimi/uzun ara sonrası ilk soru
   model yükleme süresi ödüyor. `keep_alive` ile sabitleme ölçülmedi (iki model birden
   bellekte: RAM maliyeti var).
+
+---
+
+## Gün 7 — 29.07.2026
+
+Bugün geliştirme günü değil teslim günüydü. Kod dünkü haliyle tamamlanmıştı; bugün tüm
+proje kodunun üstünden son bir kez geçtim, sistemi başka bir makinede repodan klonlayıp
+test ettim, demo videosunu ve sunumu hazırladım, README dosyasını son haline getirdim.
+
+### Kod okuması
+
+Commit öncesi tüm modüllerin üstünden geçtim. Davranış değiştiren bir bulgu çıkmadı;
+temizlik eski yorumlarla sınırlı kaldı. 
+Kararların kodda değil DEVLOG/TESTING'de yaşaması bu okumayı kolaylaştırdı.
+
+### Başka makinede temiz kurulum testi
+
+Sistemi kendi geliştirme ortamım dışında bir makinede iki yoldan da sıfırdan denedim:
+
+- **Docker:** `docker compose up -d --build`, model provizyonu, web arayüzünden belge
+  yükleme + soru-cevap. Problem bulunmadı.
+- **Local:** venv kurulumu + host Ollama + Streamlit. Problem bulunmadı.
+
+### Baştan başlasam neyi farklı yapardım
+
+- **Golden set'e baştan belirsiz sorular koyardım.** 30 sorunun hepsi net hedefli
+  ("bir önceki aya göre yüzde kaç" gibi) ve bu, gemma'nın thinking bütçesinin cevabı
+  yutması bug'ını sonuna kadar maskeledi. Gerçek kullanıcının sorduğu türden belirsiz,
+  belgede geçmeyen terimli sorulardan birkaç tane sette olsaydı bug Docker testinde değil
+  5. gün ölçümünde yakalanırdı.
+- **Cihazı ilk gün sabitleyip öyle ölçerdim.** "CPU sandığım süre aslında GPU'ymuş"
+  düzeltmesini üç ayrı yerde yaşadım: reranker bench'inde (MPS, 4. gün fark ettim),
+  embedding sürelerinde ve LLM gecikmelerinde (Metal, ancak Docker karşılaştırması
+  görünür kıldı). Kararlar değişmedi ama süre etiketlerini geriye dönük düzeltmek zorunda
+  kaldım; baştan `device` sabitlemek bunların hepsini önlerdi.
+- **Hibrit retrieval'a ayırdığım sürenin bir kısmını çelişki kategorisine verirdim.**
+  BM25 + RRF taraması öğreticiydi ama sonuç "reranker zaten kapsıyor" oldu; buna karşılık
+  çelişki kategorisi (iki belgeden iki değeri kaynağıyla getirme) en zayıf halka olarak
+  kaldı ve ona özel bir iyileştirme denemeye zaman kalmadı.

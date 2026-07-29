@@ -1,0 +1,401 @@
+# golden_qa.yaml: şema ve örnekler
+#
+# Bu dosya değerlendirmenin tek referansı. Retrieval, reranking, eşik kapısı
+# ve generation hepsi buna karşı ölçülecek.
+#
+# TASARIM KARARI: cevabın yeri chunk_id ile DEĞİL, dosya + sayfa + alıntı ile
+# işaretlenir. Sebep: chunk boyutunu değiştirdiğinde chunk_id'ler kayar
+# ve tüm etiketleme bozulur. Alıntı ise chunking'den bağımsız, eval script hangi
+# chunk'ın o alıntıyı içerdiğini eşleşmeyle kendisi bulur.
+#
+# ALANLAR:
+#   id            benzersiz kimlik (q001, q002, ...)
+#   soru          kullanıcının soracağı doğal dildeki soru
+#   kategori      aşağıdaki 8 kategoriden biri
+#   dil           tr | en  (sorunun dili)
+#   beklenen      yanitla | reddet
+#   kaynak        beklenen=yanitla ise: hangi belge(ler), sayfa, çapa alıntı
+#                 beklenen=reddet ise: boş (cevap belgede yok)
+#   referans_cevap  değerlendirme için doğru cevap (reddet ise reddetme gerekçesi)
+#   izole         (opsiyonel) bu soru ölçülürken indeksten düşürülecek belgeler
+#   not           (opsiyonel) bu sorunun neyi test ettiği
+#
+# ============================================================================
+# KATEGORİ 1: tek belgeden yanıtlanabilir (9 soru)
+# En temel durum. Cevap tek bir pasajda.
+# ============================================================================
+
+- id: q001
+  soru: "TOBB ETÜ için tezli yüksek lisans programının azami tamamlama süresi kaç dönemdir?"
+  kategori: tek_belge
+  dil: tr
+  beklenen: yanitla
+  kaynak:
+    - dosya: tobb_yonetmelik.pdf
+      sayfa: 4
+      alinti: "en çok dokuz dönemde"
+  referans_cevap: "Azami süre dokuz dönemdir."
+
+- id: q002
+  soru: "TOBB üniversitesi yüksek lisans programında bir dersten başarılı olmak için en az hangi harf notu alınmalıdır?"
+  kategori: tek_belge
+  dil: tr
+  beklenen: yanitla
+  kaynak:
+    - dosya: tobb_yonetmelik.pdf
+      sayfa: 12
+      alinti: "en az CC"
+  referans_cevap: "Yüksek lisans programında bir dersten başarılı olmak için en az CC notu almak gerekir."
+
+- id: q003
+  soru: "What accuracy does the proposed method achieve on vehicle detection?"
+  kategori: tek_belge
+  dil: en
+  beklenen: yanitla
+  kaynak:
+    - dosya: arxiv_2104.13437.pdf
+      sayfa: 1
+      alinti: "achieved %84.6 success in vehicle detection"
+  referans_cevap: "The proposed method achieved 84.6% accuracy in vehicle detection."
+
+- id: q004
+  soru: "What is the runtime CPU for inference time measurement in the paper?"
+  kategori: tek_belge
+  dil: en
+  beklenen: yanitla
+  kaynak:
+    - dosya: arxiv_2104.13437.pdf
+      sayfa: 3
+      alinti: "INTEL core i7-8750H"
+  referans_cevap: "The runtime CPU is INTEL core i7-8750H."
+
+- id: q005
+  soru: "TÜFE gıda ve alkolsüz içeceklerde yıllık olarak ne kadar artmıştır?"
+  kategori: tek_belge
+  dil: tr
+  beklenen: yanitla
+  kaynak:
+    - dosya: tuik_cpi_tr.pdf
+      sayfa: 1
+      alinti: "gıda ve alkolsüz içeceklerde yıllık %35,45 arttı"
+  referans_cevap: "yıllık %35,45 arttı."
+
+- id: q006
+  soru: "Bir ders yılında kaç gün özürsüz devamsızlık başarısızlık getirir?"
+  kategori: tek_belge
+  dil: tr
+  beklenen: yanitla
+  kaynak:
+    - dosya: resmi_gazete_1995.pdf
+      sayfa: 11
+      alinti: "20 gün"
+  referans_cevap: "20 gün devamsızlık."
+
+- id: q007
+  soru: "TÜFE Haziran 2026'da bir önceki aya göre yüzde kaç arttı?"
+  kategori: tek_belge
+  dil: tr
+  beklenen: yanitla
+  kaynak:
+    - dosya: tuik_cpi_tr.pdf
+      sayfa: 1
+      alinti: "bir önceki aya göre %0,99 artış"
+  referans_cevap: "Bir önceki aya göre %0,99 arttı."
+
+- id: q008
+  soru: "Ortaöğretimde bir dersin dönem notu nasıl belirlenir?"
+  kategori: tek_belge
+  dil: tr
+  beklenen: yanitla
+  kaynak:
+    - dosya: resmi_gazete_1995.pdf
+      sayfa: 6
+      alinti: "aritmetik ortalaması alınarak ve nota çevrilerek"
+  referans_cevap: "O döneme ait yazılı, sözlü ve uygulamalı sınavlarla ödev ve projelere verilen puanların aritmetik ortalaması alınarak belirlenir."
+
+- id: q009
+  soru: "What methods are used to track vehicles in the paper?"
+  kategori: tek_belge
+  dil: en
+  beklenen: yanitla
+  kaynak:
+    - dosya: arxiv_2104.13437.pdf
+      sayfa: 1
+      alinti: "Munkres and Kalman filter methods"
+  referans_cevap: "The vehicles are tracked using Munkres and Kalman filter methods."
+
+# ============================================================================
+# KATEGORİ 2: çok belgeli / sentez (2 soru)
+# Cevap birden fazla belgeden bilgi birleştirmeyi gerektiriyor.
+# ============================================================================
+
+- id: q011
+  soru: "ALES'ten yüksek lisans için en az kaç puan gerekir?"
+  kategori: cok_belge
+  dil: tr
+  beklenen: yanitla
+  kaynak:
+    - dosya: tobb_yonetmelik.pdf
+      sayfa: 3
+      alinti: "55 puandan az olmamak"
+    - dosya: anadolu_yonetmelik.pdf
+      sayfa: 1
+      alinti: "en az 55 puana"
+  referans_cevap: "Başvurulan programın puan türünde en az 55 puan."
+
+- id: q012
+  soru: "İki üniversitenin doktora programı için istediği asgari lisans not ortalaması nedir?"
+  kategori: cok_belge
+  dil: tr
+  beklenen: yanitla
+  kaynak:
+    - dosya: tobb_yonetmelik.pdf
+      sayfa: 7
+      alinti: "dört üzerinden en az üç"
+    - dosya: anadolu_yonetmelik.pdf
+      sayfa: 2
+      alinti: "lisans derecesiyle başvuranların en az 3,00/4,00"
+  referans_cevap: "İki üniversitenin de istediği asgari lisans not ortalaması 3,00/4,00'tür.."
+
+
+# ============================================================================
+# KATEGORİ 3: yanıtlanamaz ama makul (4 soru) [KRİTİK]
+# Konu belgenin alanında ama cevap belgede YOK. Beklenen: reddetme.
+# Sistemin uydurma yapıp yapmadığını burada ölçüyoruz.
+# ============================================================================
+
+- id: q021
+  soru: "Eğitim harcama grubunda yıllık değişim oranı yüzde kaçtır?"
+  kategori: yanitlanamaz
+  dil: tr
+  beklenen: reddet
+  kaynak: []
+  referans_cevap: "Bu değer belgenin metninde yok, yalnızca çubuk grafikte. Sistem reddetmeli."
+  not: "Grafik içi veri. Kullanıcı belgede görüyor, metin katmanında yok. En gerçekçi yanıtlanamaz vaka."
+
+- id: q022
+  soru: "What is the abnormality detection accuracy on video streams?"
+  kategori: yanitlanamaz
+  dil: en
+  beklenen: reddet
+  kaynak: []
+  referans_cevap: "The paper does not provide any results for video stream input."
+  not: "Konu tam belgenin alanında, makul chunk'lar gelecek. Zor reddetme vakası."
+
+- id: q023
+  soru: "Anadolu Üniversitesi'nde yaz okulu ücreti ne kadardır?"
+  kategori: yanitlanamaz
+  dil: tr
+  beklenen: reddet
+  kaynak: []
+  referans_cevap: "Yönetmelik yaz okulunu düzenliyor ancak ücret bilgisi içermiyor. Sistem uydurmamalı."
+  not: "Yaz okulu belgede geçiyor, retrieval makul chunk getirecek. Konu içinde ama spesifik cevap (ücret) yok. Zor reddetme vakası."
+
+- id: q024
+  soru: "Ortaöğretimde staj süresi kaç haftadır?"
+  kategori: yanitlanamaz
+  dil: tr
+  beklenen: reddet
+  kaynak: []
+  referans_cevap: "Yönetmelik stajı beceri eğitimi bağlamında anıyor ancak bir süre tanımlamıyor. Sistem uydurmamalı."
+  not: "Staj belgede geçiyor (beceri eğitimi bağlamında), retrieval makul chunk getirecek. Konu içinde, spesifik cevap (süre) yok. Zor reddetme."
+
+# ============================================================================
+# KATEGORİ 4: yanlış öncüllü (4 soru)
+# Soru, belgede olmayan bir şeyi varsayıyor. Beklenen: öncülü düzeltip reddet.
+# ============================================================================
+
+- id: q031
+  soru: "2019 yılındaki TÜFE artış oranı neydi?"
+  kategori: yanlis_oncul
+  dil: tr
+  beklenen: reddet
+  kaynak: []
+  referans_cevap: "Belge Haziran 2026 bültenidir; 2019 verisi içermiyor. Sistem bu yılın belgede olmadığını belirtmeli."
+  not: "Yanlış öncül: soru geçmiş bir yılı varsayıyor, belge o yılı kapsamıyor."
+
+- id: q032
+  soru: "What is the increase of CPI in 2019?"
+  kategori: yanlis_oncul
+  dil: en
+  beklenen: reddet
+  kaynak: []
+  referans_cevap: "The document is from June 2026. It does not include data from 2019."
+  not: "Yanlış öncül: soru geçmiş bir yılı varsayıyor, belge o yılı kapsamıyor."
+
+- id: q033
+  soru: "Tezsiz yüksek lisansta tez ne zaman savunulur?"
+  kategori: yanlis_oncul
+  dil: tr
+  beklenen: reddet
+  kaynak: []
+  referans_cevap: "Tezsiz yüksek lisansta tez savunması yoktur."
+  not: "Yanlış öncül: soru tezsiz yüksek lisansta tez olacağını varsayıyor."
+
+- id: q034
+  soru: "Ortaöğretimde beşli not düzeninde 6 hangi nota karşılık gelir?"
+  kategori: yanlis_oncul
+  dil: tr
+  beklenen: reddet
+  kaynak: []
+  referans_cevap: "Beşli not düzeninde 6 notu yoktur."
+  not: "Yanlış öncül: soru beşli not düzeninde olmayan bir notu varsayıyor."
+
+
+# ============================================================================
+# KATEGORİ 5: çelişkili (2 soru)
+# İki belge aynı soruya farklı cevap veriyor. Beklenen: her ikisini kaynağıyla sun.
+# ============================================================================
+
+- id: q041
+  soru: "Tezli yüksek lisans için gereken asgari genel not ortalaması kaçtır?"
+  kategori: celiski
+  dil: tr
+  beklenen: yanitla
+  kaynak:
+    - dosya: anadolu_yonetmelik.pdf
+      sayfa: 10
+      alinti: "2,50 GNO"
+    - dosya: tobb_yonetmelik.pdf
+      sayfa: 4
+      alinti: "3,00 akademik ortalamayı"
+  referans_cevap: "İki yönetmelik farklı eşik belirliyor: Anadolu 2,50, TOBB 3,00. Sistem ikisini de kaynağıyla belirtmeli, tek cevaba indirgememeli."
+  not: "Net sayısal çelişki. Aynı kavram (GNO eşiği), açıkça farklı değer, en temiz çelişki vakası."
+
+- id: q042
+  soru: "Tezsiz yüksek lisans programının azami tamamlama süresi kaç dönemdir?"
+  kategori: celiski
+  dil: tr
+  beklenen: yanitla
+  kaynak:
+    - dosya: anadolu_yonetmelik.pdf
+      sayfa: 13
+      alinti: "en çok üç yarıyıldır"
+    - dosya: tobb_yonetmelik.pdf
+      sayfa: 6
+      alinti: "en çok beş dönemdir"
+  referans_cevap: "İki yönetmelik farklı süre veriyor: Anadolu en çok üç yarıyıl, TOBB en çok beş dönem (yarıyıl = dönem). Sistem ikisini de kaynağıyla belirtmeli."
+  not: "Net çelişki: 3 yarıyıl vs 5 dönem. Birimler aynı (yarıyıl=dönem), değerler farklı. Sistemin birim eşitliğini anlaması beklenir."
+
+# ============================================================================
+# KATEGORİ 6: tablo (4 soru)
+# Cevap bir tablonun içinde. OCR/parsing'in tabloyu koruyup korumadığını test eder.
+# ============================================================================
+
+- id: q051
+  soru: "Haziran 2025'te aylık TÜFE değişim oranı neydi?"
+  kategori: tablo
+  dil: tr
+  beklenen: yanitla
+  kaynak:
+    - dosya: tuik_cpi_tr.pdf
+      sayfa: 1
+      alinti: "1,37"
+  referans_cevap: "Aylık değişim oranı %1,37 olarak gerçekleşti."
+  not: "Değer tablonun içinde (Haziran 2025 sütunu, aylık değişim satırı). Tablo yapısı korunmazsa yanlış hücre gelir."
+
+- id: q052
+  soru: "Anadolu Üniversitesi için AA harf notunun katsayısı nedir?"
+  kategori: tablo
+  dil: tr
+  beklenen: yanitla
+  kaynak:
+    - dosya: anadolu_yonetmelik.pdf
+      sayfa: 9
+      alinti: "AA 4,00"
+  referans_cevap: "AA notunun katsayısı 4,00'tür."
+  not: "Değer tablonun içinde. Tablo yapısı korunmazsa yanlış hücre gelir."
+
+- id: q053
+  soru: "Ortaöğretimde 70-84 puan aralığı hangi dereceye karşılık gelir?"
+  kategori: tablo
+  dil: tr
+  beklenen: yanitla
+  kaynak:
+    - dosya: resmi_gazete_1995.pdf
+      sayfa: 2
+      alinti: "70-84 4 İyi"
+  referans_cevap: "70-84 aralığı İyi dereceye karşılık gelmektedir."
+  not: "Değer tablonun içinde. Tablo yapısı korunmazsa yanlış hücre gelir."
+
+- id: q054
+  soru: "What is the accuracy score for YOLOV3 model in the paper?"
+  kategori: tablo
+  dil: en
+  beklenen: yanitla
+  kaynak:
+    - dosya: arxiv_2104.13437.pdf
+      sayfa: 3
+      alinti: "88.28"
+  referans_cevap: "88.28 (score column). Note: the same row contains other values (95.6, 89.9, 80.7) in mAP columns; a correct answer requires selecting the score column specifically."
+  not: "Değer tablonun içinde. Tablo yapısı korunmazsa yanlış hücre gelir."
+
+
+# ============================================================================
+# KATEGORİ 7: çapraz dil (3 soru)
+# TR soru → EN belge. Çok dilli embedding uzayını test eder.
+# ============================================================================
+
+- id: q061
+  soru: "Konut grubunda yıllık değişim oranı neydi?"
+  kategori: capraz_dil
+  dil: tr
+  beklenen: yanitla
+  kaynak:
+    - dosya: tuik_cpi_en.pdf
+      sayfa: 1
+      alinti: "increased by 45.14% for housing"
+  izole:
+    - tuik_cpi_tr.pdf
+  referans_cevap: "%45,14"
+  not: "TR soru, EN belge. Çapraz dil skor kaymasını burada ölçüyoruz. Aynı bilgi
+    TR bültende de var; izole olmadan retrieval TR belgeyi getirip doğru cevabı
+    veriyor ama satır kaçırma sayılıyor, o yüzden TR ikizi indeksten düşürülüyor."
+
+- id: q062
+  soru: "Makalede kaç saatlik simülasyon verisi kullanılmıştır?"
+  kategori: capraz_dil
+  dil: tr
+  beklenen: yanitla
+  kaynak:
+    - dosya: arxiv_2104.13437.pdf
+      sayfa: 2
+      alinti: "37 hours of simulation data"
+  referans_cevap: "37 saat"
+  not: "TR soru, EN belge. Çapraz dil skor kaymasını burada ölçüyoruz."
+
+- id: q063
+  soru: "Makalede araç takibi için hangi metodlar kullanılmıştır?"
+  kategori: capraz_dil
+  dil: tr
+  beklenen: yanitla
+  kaynak:
+    - dosya: arxiv_2104.13437.pdf
+      sayfa: 1
+      alinti: "we tracked the vehicles using Munkres and Kalman filter methods"
+  referans_cevap: "Kalman ve Munkres filtresi kullanılmıştır."
+  not: "TR soru, EN belge. Çapraz dil skor kaymasını burada ölçüyoruz."
+
+# ============================================================================
+# KATEGORİ 8: alan dışı (2 soru)
+# Belgelerle hiç ilgisi yok. Kolay reddetme vakası.
+# ============================================================================
+
+- id: q071
+  soru: "Bugün Ankara'da hava nasıl?"
+  kategori: alan_disi
+  dil: tr
+  beklenen: reddet
+  kaynak: []
+  referans_cevap: "Belgelerle ilgisiz. Sistem reddetmeli."
+  not: "Retrieval hiç eşleşme bulmamalı; eşik kapısı LLM'i çağırmadan reddetmeli."
+
+- id: q072
+  soru: "Who won the 2026 World Cup?"
+  kategori: alan_disi
+  dil: en
+  beklenen: reddet
+  kaynak: []
+  referans_cevap: "Irrelevant with the documents. The system should reject."
+  not: "Retrieval hiç eşleşme bulmamalı; eşik kapısı LLM'i çağırmadan reddetmeli."
+

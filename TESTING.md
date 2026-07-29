@@ -339,6 +339,45 @@ korundu.
 | "What is the inflation rate?" | stop | 4605 | 17.499 | 438 |
 | "Tezli YL asgari GNO?" | length | **6000 (tavan doldu)** | 24.690 | **0 (boş)** |
 
+### Örnek soru-cevaplar
+
+Aşağıdaki örnekler `eval_generation.py`'nin kaydettiği ham çıktılardan (`out/generation/`,
+depth 10) alınmıştır; cevaplar düzenlenmeden aktarıldı. Model her örnekte belirtildi
+(turbo: qwen3.5:4b varsayılan model, large: gemma4:e4b).
+
+**TR soru → TR belge (q001, tek belge — large):**
+> **S:** TOBB ETÜ için tezli yüksek lisans programının azami tamamlama süresi kaç dönemdir?
+> **C:** Tezli yüksek lisans programının en çok tamamlanma süresi dokuz dönemdir [1].
+> **Kaynak:** tobb_yonetmelik.pdf, s.4
+
+**EN soru → EN belge (q004, tek belge — turbo):**
+> **S:** What is the runtime CPU for inference time measurement in the paper?
+> **C:** The runtime CPU used for measuring inference time is an INTEL core i7-8750H [1].
+> **Kaynak:** arxiv_2104.13437.pdf, s.3
+
+**Çapraz dil: TR soru → EN belge (q063 — turbo):**
+> **S:** Makalede araç takibi için hangi metodlar kullanılmıştır?
+> **C:** Makalede araç takibinde **Kalman filtresi** ve **Munkres algoritması**
+> kullanılmıştır. Ayrıca araçların birbirleriyle ilişkisini belirlemek (arac eşleştirme)
+> amacıyla **Jaccard indeksi** de uygulanmıştır [1][3].
+> **Kaynak:** arxiv_2104.13437.pdf, s.1 ve s.4 (belge İngilizce, cevap soru dilinde)
+
+**Reddetme, aşama 2 — konu belgede var ama cevap yok (q033, yanlış öncül — turbo):**
+> **S:** Tezsiz yüksek lisansta tez ne zaman savunulur?
+> **C:** [YANITLANAMADI] Belgeler, tezsiz yüksek lisans programında bir "tez" olduğu için
+> savunma yapılması gerektiğini veya bunun nasıl yapıldığını belirtmez; bu tür
+> programlarda genellikle tez savunmasından ziyade proje sunumu ve ders kredilerinin
+> tamamlanması beklenir.
+> *(Reranker top-1 skoru 0.95: konu yönetmelikte geçtiği için skor eşiği geçiyor;
+> reddeden LLM grounding aşaması. Tek eşiğin yetmeyip iki aşamalı kapı kurulmasının
+> somut örneği.)*
+
+**Reddetme, aşama 1 — bariz alan dışı (q071):**
+> **S:** Bugün Ankara'da hava nasıl?
+> **C:** [YANITLANAMADI] ilgili belge bulunamadı
+> *(Reranker top-1 skoru eşiğin (0.003) altında; LLM hiç çağrılmadan reddedildi, model
+> bağımsız.)*
+
 ---
 
 ## 4. Web UI ve dağıtım (Gün 6)

@@ -1,3 +1,8 @@
+# Hot-reload watcher off: it walks sys.modules and trips transformers' lazy
+# imports (zoedepth -> torchvision, not installed), spamming the log.
+[server]
+fileWatcherType = "none"
+
 # Web UI theme (webui.py), fixed to dark.
 # Source chips are :blue-badge in webui.py, so the blue* keys carry the navy;
 # on the dark background a lightened navy is used for contrast.

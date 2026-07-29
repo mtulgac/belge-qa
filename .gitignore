@@ -6,6 +6,7 @@ __pycache__/
 data/index/
 data/uploads/
 out/
+personal/
 .cache/
 *.npz
 *.egg-info/
